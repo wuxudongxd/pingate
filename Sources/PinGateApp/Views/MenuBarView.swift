@@ -385,7 +385,7 @@ struct MenuBarView: View {
                 .tint(.red)
                 .controlSize(.small)
             } else {
-                Button(isRunning ? "激活" : "启动") {
+                Button(isRunning ? "打开" : "启动") {
                     Task { await appState.launchOrActivate(target: target) }
                 }
                 .buttonStyle(.bordered)
@@ -416,7 +416,7 @@ struct MenuBarView: View {
     private func targetContextMenu(for target: ManagedTarget) -> some View {
         switch target.kind {
         case .guiApp:
-            Button("启动或激活") {
+            Button("打开") {
                 Task { await appState.launchOrActivate(target: target) }
             }
             Button("用代理重启…") {

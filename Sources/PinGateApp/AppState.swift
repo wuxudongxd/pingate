@@ -604,7 +604,7 @@ final class AppState {
         case .launched(_, let name, let port):
             showStatusBanner("已启动 \(name)，固定至出口 :\(String(port))")
         case .activatedExisting(_, let name):
-            showStatusBanner("已激活受保护的 \(name)")
+            showStatusBanner("已切换到受保护的 \(name)")
         case .runningWithoutProxy(_, let name, let port):
             showStatusBanner("\(name) 未走出口 :\(String(port))，请点击「用代理重启」")
         case .restartedWithProxy(_, _, let name, let port):

@@ -389,7 +389,7 @@ struct TargetsView: View {
                 .tint(.red)
                 .controlSize(.small)
             } else {
-                Button(processes.isEmpty ? "启动" : "激活窗口") {
+                Button(processes.isEmpty ? "启动" : "打开") {
                     Task { await appState.launchOrActivate(target: target) }
                 }
                 .buttonStyle(.bordered)

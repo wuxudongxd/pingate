@@ -7,7 +7,7 @@ public enum ProfileWatcherError: Error, LocalizedError, Sendable {
     public var errorDescription: String? {
         switch self {
         case .fileNotAccessible(let path, let code):
-            return "Unable to watch file at \(path) (errno=\(code))."
+            return "无法监听文件 \(path)（错误码 errno=\(code)）。"
         }
     }
 }

@@ -36,9 +36,9 @@ struct TargetsView: View {
     private var headerRow: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Managed Targets")
+                Text("纳管目标")
                     .font(.title2.bold())
-                Text("Pin GUI apps, install CLI shims, and keep T3 Code provider environments synchronized.")
+                Text("为桌面应用注入固定出口，管理 CLI Shim 并同步 T3 Code 环境配置。")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -47,7 +47,7 @@ struct TargetsView: View {
                 guard let outletID = appState.config.primaryOutlet()?.id else { return }
                 isCreatingNew = true
                 editingTarget = ManagedTarget(
-                    name: "New App",
+                    name: "新建应用",
                     kind: .guiApp,
                     outletID: outletID,
                     appPath: "/Applications/",
@@ -55,7 +55,7 @@ struct TargetsView: View {
                     extraEnv: ["NODE_USE_ENV_PROXY": "1"]
                 )
             } label: {
-                Label("Add Target", systemImage: "plus")
+                Label("新增目标", systemImage: "plus")
             }
             .buttonStyle(.borderedProminent)
             .disabled(appState.config.outlets.isEmpty)
@@ -63,7 +63,7 @@ struct TargetsView: View {
     }
 
     private var templatesSection: some View {
-        GroupBox("Built-in Templates") {
+        GroupBox("内置模板") {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 205), spacing: 12)], spacing: 12) {
                 ForEach(PinGateTemplates.all) { template in
                     VStack(alignment: .leading, spacing: 8) {
@@ -80,7 +80,7 @@ struct TargetsView: View {
                             .lineLimit(3)
                             .frame(maxWidth: .infinity, alignment: .leading)
                         Spacer(minLength: 0)
-                        Button("Apply Template") {
+                        Button("应用模板") {
                             Task { await appState.applyTemplate(template) }
                         }
                         .buttonStyle(.bordered)
@@ -99,9 +99,9 @@ struct TargetsView: View {
     }
 
     private var targetsListSection: some View {
-        GroupBox("Active Targets (\(appState.config.targets.count))") {
+        GroupBox("已纳管目标（\(String(appState.config.targets.count))）") {
             if appState.config.targets.isEmpty {
-                Text("No managed targets yet. Apply a template above or add a custom target.")
+                Text("暂未配置纳管目标。请应用上方模板或手动新增目标。")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .padding(16)
@@ -121,7 +121,7 @@ struct TargetsView: View {
         let processes = appState.processesForTarget(target)
         let isLeaking = appState.isTargetLeaking(target)
         let proxiedCount = appState.proxiedConnectionCount(for: target)
-        let outletName = appState.config.outlet(id: target.outletID)?.name ?? "Unknown Outlet"
+        let outletName = appState.config.outlet(id: target.outletID)?.name ?? "未知出口"
 
         return HStack(spacing: 12) {
             Toggle(
@@ -149,9 +149,9 @@ struct TargetsView: View {
                     badge(outletName, color: .accentColor)
 
                     if isLeaking {
-                        badge("LEAK / UNPROXIED", color: .red)
+                        badge("漏网 / 未走代理", color: .red)
                     } else if !processes.isEmpty {
-                        badge("\(proxiedCount) proxied", color: .green)
+                        badge("\(String(proxiedCount)) 条代理", color: .green)
                     }
                 }
 
@@ -164,7 +164,7 @@ struct TargetsView: View {
                                 .foregroundStyle(.secondary)
                         }
                         if target.chromiumProxyFlags {
-                            Text("Chromium flags")
+                            Text("Chromium 代理参数")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
@@ -174,13 +174,13 @@ struct TargetsView: View {
                         Label("~/.local/bin/\(cmd)", systemImage: "terminal")
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
-                        badge(installed ? "Shim Installed" : "Shim Not Installed", color: installed ? .green : .orange)
+                        badge(installed ? "Shim 已安装" : "Shim 未安装", color: installed ? .green : .orange)
                     case .t3Integration:
                         let synced = appState.t3SyncStatuses[target.id] ?? false
                         Label(target.t3SettingsPath ?? "~/.t3/userdata/settings.json", systemImage: "doc.text")
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
-                        badge(synced ? "Synced" : "Needs Sync", color: synced ? .green : .orange)
+                        badge(synced ? "已同步" : "待同步", color: synced ? .green : .orange)
                     }
                 }
             }
@@ -191,14 +191,14 @@ struct TargetsView: View {
                 switch target.kind {
                 case .guiApp:
                     if isLeaking {
-                        Button("Restart with Proxy") {
+                        Button("用代理重启") {
                             Task { await appState.restartTargetWithProxy(target: target) }
                         }
                         .buttonStyle(.borderedProminent)
                         .tint(.red)
                         .controlSize(.small)
                     } else {
-                        Button(processes.isEmpty ? "Launch" : "Activate") {
+                        Button(processes.isEmpty ? "启动" : "激活窗口") {
                             Task { await appState.launchOrActivate(target: target) }
                         }
                         .buttonStyle(.bordered)
@@ -206,27 +206,27 @@ struct TargetsView: View {
                     }
                 case .cliTool:
                     let installed = appState.cliShimStatuses[target.id] ?? false
-                    Button(installed ? "Reinstall Shim" : "Install Shim") {
+                    Button(installed ? "重装 Shim" : "安装 Shim") {
                         Task { await appState.installCLIShim(for: target) }
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     if installed {
-                        Button("Remove") {
+                        Button("移除") {
                             Task { await appState.removeCLIShim(for: target) }
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                     }
                 case .t3Integration:
-                    Button("Sync T3 Code") {
+                    Button("同步 T3 Code") {
                         Task { await appState.syncT3Code(for: target) }
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
                 }
 
-                Button("Edit") {
+                Button("编辑") {
                     isCreatingNew = false
                     editingTarget = target
                 }
@@ -282,22 +282,22 @@ private struct TargetEditorSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(isNew ? "Add Managed Target" : "Edit \(draft.name)")
+            Text(isNew ? "新增纳管目标" : "编辑 \(draft.name)")
                 .font(.title3.bold())
 
             Form {
-                TextField("Name", text: $draft.name)
-                Picker("Kind", selection: $draft.kind) {
+                TextField("名称", text: $draft.name)
+                Picker("类型", selection: $draft.kind) {
                     ForEach(TargetKind.allCases, id: \.self) { kind in
                         Text(kind.displayName).tag(kind)
                     }
                 }
-                Picker("Outlet", selection: $draft.outletID) {
+                Picker("绑定出口", selection: $draft.outletID) {
                     ForEach(outlets) { outlet in
-                        Text("\(outlet.name) (:\(outlet.listenPort))").tag(outlet.id)
+                        Text("\(outlet.name) (:\(String(outlet.listenPort)))").tag(outlet.id)
                     }
                 }
-                TextField("Process Match Names (comma-separated)", text: $processNamesCSV)
+                TextField("进程匹配名（逗号分隔）", text: $processNamesCSV)
 
                 switch draft.kind {
                 case .guiApp:
@@ -306,38 +306,39 @@ private struct TargetEditorSheet: View {
                         set: { draft.bundleID = $0.isEmpty ? nil : $0 }
                     ))
                     HStack {
-                        TextField("App Path", text: Binding(
+                        TextField("应用路径", text: Binding(
                             get: { draft.appPath ?? "" },
                             set: { draft.appPath = $0.isEmpty ? nil : $0 }
                         ))
-                        Button("Browse…") {
+                        Button("选择…") {
                             let panel = NSOpenPanel()
                             panel.canChooseFiles = true
                             panel.canChooseDirectories = false
                             panel.directoryURL = URL(fileURLWithPath: "/Applications")
+                            panel.title = "选择应用程序"
                             if panel.runModal() == .OK, let url = panel.url {
                                 draft.appPath = url.path
                             }
                         }
                     }
-                    Toggle("Inject Chromium Proxy & Disable-QUIC Flags", isOn: $draft.chromiumProxyFlags)
+                    Toggle("注入 Chromium 代理与禁用 QUIC 参数", isOn: $draft.chromiumProxyFlags)
 
                 case .cliTool:
-                    TextField("CLI Command Name (in ~/.local/bin)", text: Binding(
+                    TextField("CLI 命令名（位于 ~/.local/bin）", text: Binding(
                         get: { draft.cliCommandName ?? "" },
                         set: { draft.cliCommandName = $0.isEmpty ? nil : $0 }
                     ))
-                    TextField("Real Target Binary Path", text: Binding(
+                    TextField("原始二进制路径", text: Binding(
                         get: { draft.cliTargetBinaryPath ?? "" },
                         set: { draft.cliTargetBinaryPath = $0.isEmpty ? nil : $0 }
                     ))
 
                 case .t3Integration:
-                    TextField("T3 Settings Path", text: Binding(
+                    TextField("T3 配置文件路径", text: Binding(
                         get: { draft.t3SettingsPath ?? "~/.t3/userdata/settings.json" },
                         set: { draft.t3SettingsPath = $0.isEmpty ? nil : $0 }
                     ))
-                    TextField("Provider Key", text: Binding(
+                    TextField("Provider 键名", text: Binding(
                         get: { draft.t3ProviderKey ?? "antigravity" },
                         set: { draft.t3ProviderKey = $0.isEmpty ? nil : $0 }
                     ))
@@ -347,8 +348,8 @@ private struct TargetEditorSheet: View {
 
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }
-                Button("Save") {
+                Button("取消") { dismiss() }
+                Button("保存") {
                     draft.processMatchNames = processNamesCSV
                         .split(separator: ",")
                         .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }

@@ -9,13 +9,13 @@ public enum ConfigStoreError: Error, LocalizedError, Sendable {
     public var errorDescription: String? {
         switch self {
         case .unsupportedSchemaVersion(let version):
-            return "Unsupported PinGate config schemaVersion \(version); supported version is \(PinGateConfig.currentSchemaVersion)."
+            return "不支持的 PinGate 配置版本 \(version)，当前支持版本为 \(PinGateConfig.currentSchemaVersion)。"
         case .encodingFailed(let message):
-            return "Failed to encode PinGate config: \(message)"
+            return "PinGate 配置编码失败：\(message)"
         case .decodingFailed(let message):
-            return "Failed to decode PinGate config: \(message)"
+            return "PinGate 配置解析失败：\(message)"
         case .ioFailed(let message):
-            return "ConfigStore I/O error: \(message)"
+            return "配置文件读写失败：\(message)"
         }
     }
 }
@@ -66,7 +66,7 @@ public final class ConfigStore: Sendable {
                 }
                 try Self.setPosixPermissions(0o700, at: dir)
             } catch {
-                throw ConfigStoreError.ioFailed("Unable to prepare directory \(dir.path): \(error.localizedDescription)")
+                throw ConfigStoreError.ioFailed("无法准备目录 \(dir.path)：\(error.localizedDescription)")
             }
         }
     }
@@ -80,7 +80,7 @@ public final class ConfigStore: Sendable {
         do {
             data = try Data(contentsOf: configFileURL)
         } catch {
-            throw ConfigStoreError.ioFailed("Unable to read \(configFileURL.path): \(error.localizedDescription)")
+            throw ConfigStoreError.ioFailed("无法读取配置文件 \(configFileURL.path)：\(error.localizedDescription)")
         }
 
         let decoder = JSONDecoder()
@@ -144,7 +144,7 @@ public final class ConfigStore: Sendable {
             attributes: [.posixPermissions: NSNumber(value: posixPermissions)]
         )
         guard created else {
-            throw ConfigStoreError.ioFailed("Failed to create temporary file at \(tempURL.path)")
+            throw ConfigStoreError.ioFailed("无法在 \(tempURL.path) 创建临时文件")
         }
 
         do {
@@ -164,7 +164,7 @@ public final class ConfigStore: Sendable {
             try setPosixPermissions(posixPermissions, at: destinationURL)
         } catch {
             try? fm.removeItem(at: tempURL)
-            throw ConfigStoreError.ioFailed("Failed atomic write to \(destinationURL.path): \(error.localizedDescription)")
+            throw ConfigStoreError.ioFailed("原子写入 \(destinationURL.path) 失败：\(error.localizedDescription)")
         }
     }
 

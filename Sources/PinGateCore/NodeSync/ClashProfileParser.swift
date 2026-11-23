@@ -157,23 +157,23 @@ public enum ClashProfileParserError: Error, LocalizedError, Sendable, Equatable 
     public var errorDescription: String? {
         switch self {
         case .invalidYAML(let detail):
-            return "Invalid Clash profile YAML: \(detail)"
+            return "Clash 配置文件 YAML 格式无效：\(detail)"
         case .missingProxiesSection:
-            return "No proxies found in Clash profile YAML."
+            return "Clash 配置文件中未找到代理节点（proxies）列表。"
         case .emptyPrimaryNodeName:
-            return "Primary node name is empty. Configure primaryNodeName before syncing."
+            return "主节点名称为空，请先配置主节点名称后再同步。"
         case .nodeNotFound(let name, let availableCount):
-            return "Node '\(name)' was not found among \(availableCount) proxies in profile."
+            return "在配置文件的 \(availableCount) 个节点中未找到目标节点“\(name)”。"
         case .missingDialerProxy(let node, let dialerProxy):
-            return "Node '\(node)' references dialer-proxy '\(dialerProxy)', which does not exist in profile."
+            return "节点“\(node)”依赖的前置代理（dialer-proxy）“\(dialerProxy)”在配置文件中不存在。"
         case .dialerProxyCycle(let chain):
-            return "Circular dialer-proxy dependency detected: \(chain.joined(separator: " -> "))"
+            return "检测到前置代理（dialer-proxy）循环依赖：\(chain.joined(separator: " -> "))"
         case .fileReadFailed(let message):
-            return "Failed to read profile file: \(message)"
+            return "读取配置文件失败：\(message)"
         case .remoteFetchFailed(let message):
-            return "Failed to fetch remote subscription: \(message)"
+            return "拉取远程订阅失败：\(message)"
         case .invalidSourceConfiguration(let message):
-            return "Invalid outlet source configuration: \(message)"
+            return "出口来源配置无效：\(message)"
         }
     }
 }
@@ -376,11 +376,11 @@ public struct ClashProfileParser: Sendable {
         }
 
         if let httpResponse = response as? HTTPURLResponse, !(200...299).contains(httpResponse.statusCode) {
-            throw ClashProfileParserError.remoteFetchFailed("HTTP status \(httpResponse.statusCode)")
+            throw ClashProfileParserError.remoteFetchFailed("HTTP 状态码 \(httpResponse.statusCode)")
         }
 
         guard let rawText = String(data: data, encoding: .utf8), !rawText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw ClashProfileParserError.remoteFetchFailed("Empty or non-UTF-8 response body")
+            throw ClashProfileParserError.remoteFetchFailed("响应内容为空或非 UTF-8 编码")
         }
 
         // If the payload is base64-encoded Clash YAML, decode it transparently.
@@ -403,7 +403,7 @@ public struct ClashProfileParser: Sendable {
         case .localClashProfile(let path):
             let expanded = NSString(string: path).expandingTildeInPath
             guard !expanded.isEmpty else {
-                throw ClashProfileParserError.invalidSourceConfiguration("Local Clash profile path is empty.")
+                throw ClashProfileParserError.invalidSourceConfiguration("本地 Clash 配置文件路径为空。")
             }
             return try extractChain(
                 fromFileAt: URL(fileURLWithPath: expanded),
@@ -413,7 +413,7 @@ public struct ClashProfileParser: Sendable {
 
         case .remoteSubscription(let urlString, _):
             guard let url = URL(string: urlString), let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
-                throw ClashProfileParserError.invalidSourceConfiguration("Invalid subscription URL: \(urlString)")
+                throw ClashProfileParserError.invalidSourceConfiguration("订阅 URL 无效：\(urlString)")
             }
             let yaml = try await fetchRemoteSubscription(url: url, session: session)
             return try extractChain(
@@ -441,7 +441,7 @@ public struct ClashProfileParser: Sendable {
         case .upstreamProxy(let scheme, let host, let port, let username, let password):
             let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmedHost.isEmpty, (1...65535).contains(port) else {
-                throw ClashProfileParserError.invalidSourceConfiguration("Upstream proxy host/port is invalid.")
+                throw ClashProfileParserError.invalidSourceConfiguration("上游代理主机地址或端口无效。")
             }
             let nodeName = outlet.primaryNodeName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ? "UPSTREAM"

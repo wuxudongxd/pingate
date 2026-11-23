@@ -262,7 +262,12 @@ cat > "${STAGED_APP}/Contents/Info.plist" <<EOF
 <plist version="1.0">
 <dict>
     <key>CFBundleDevelopmentRegion</key>
-    <string>en</string>
+    <string>zh-Hans</string>
+    <key>CFBundleLocalizations</key>
+    <array>
+        <string>zh-Hans</string>
+        <string>en</string>
+    </array>
     <key>CFBundleDisplayName</key>
     <string>PinGate</string>
     <key>CFBundleExecutable</key>

@@ -67,7 +67,7 @@ struct MenuBarView: View {
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
                     } else {
-                        Text("No outlet configured")
+                        Text("未配置出口")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -77,7 +77,7 @@ struct MenuBarView: View {
 
                 let leakCount = appState.auditSnapshot?.totalLeakSockets ?? 0
                 statusPill(
-                    text: leakCount == 0 ? "0 Leaks" : "\(leakCount) Leaks!",
+                    text: leakCount == 0 ? "0 漏网" : "\(String(leakCount)) 处漏网！",
                     color: leakCount == 0 ? .green : .red
                 )
             }
@@ -97,7 +97,7 @@ struct MenuBarView: View {
                         .foregroundStyle(.secondary)
                 } else {
                     Label {
-                        Text(appState.isProbingExitIP ? "Probing exit IP…" : "Exit IP pending")
+                        Text(appState.isProbingExitIP ? "正在探测出口 IP…" : "等待探测出口 IP")
                             .font(.caption)
                     } icon: {
                         Image(systemName: "globe")
@@ -114,10 +114,10 @@ struct MenuBarView: View {
                         .font(.caption)
                 }
                 .buttonStyle(.borderless)
-                .help("Re-probe outlet exit IP")
+                .help("重新探测出口 IP")
                 .disabled(!appState.outletRunning || appState.isProbingExitIP)
 
-                Button(appState.outletRunning ? "Stop" : "Start") {
+                Button(appState.outletRunning ? "停止" : "启动") {
                     Task {
                         if appState.outletRunning {
                             await appState.stopOutlet()
@@ -141,19 +141,19 @@ struct MenuBarView: View {
     private var targetsSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("Protected Targets")
+                Text("受保护目标")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
                 if let snapshot = appState.auditSnapshot {
-                    Text("\(snapshot.totalProxiedSockets) proxied")
+                    Text("\(String(snapshot.totalProxiedSockets)) 条代理连接")
                         .font(.caption2.monospaced())
                         .foregroundStyle(.secondary)
                 }
             }
 
             if appState.config.targets.isEmpty {
-                Text("No managed targets configured.")
+                Text("暂未配置纳管目标。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 6)
@@ -182,34 +182,34 @@ struct MenuBarView: View {
                     Text(target.name)
                         .font(.subheadline.weight(.medium))
                     if isLeaking {
-                        statusPill(text: "Unproxied", color: .red)
+                        statusPill(text: "未走代理", color: .red)
                     } else if isRunning {
-                        statusPill(text: "\(proxiedCount) proxied", color: .green)
+                        statusPill(text: "\(String(proxiedCount)) 条代理", color: .green)
                     } else if target.kind == .cliTool {
                         let installed = appState.cliShimStatuses[target.id] ?? false
                         statusPill(
-                            text: installed ? "Shim Ready" : "No Shim",
+                            text: installed ? "Shim 就绪" : "未安装 Shim",
                             color: installed ? .blue : .secondary
                         )
                     } else if target.kind == .t3Integration {
                         let synced = appState.t3SyncStatuses[target.id] ?? false
                         statusPill(
-                            text: synced ? "Synced" : "Unsynced",
+                            text: synced ? "已同步" : "待同步",
                             color: synced ? .blue : .orange
                         )
                     } else {
-                        Text("Idle")
+                        Text("未运行")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
                 }
 
                 if isLeaking {
-                    Text("Process detected without outlet proxy")
+                    Text("检测到进程未走固定出口代理")
                         .font(.caption2)
                         .foregroundStyle(.red)
                 } else if isRunning {
-                    Text("\(processes.count) active process(es)")
+                    Text("\(String(processes.count)) 个活跃进程")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 } else if let cmd = target.cliCommandName {
@@ -245,14 +245,14 @@ struct MenuBarView: View {
         switch target.kind {
         case .guiApp:
             if isLeaking {
-                Button("Restart with Proxy") {
+                Button("用代理重启") {
                     Task { await appState.restartTargetWithProxy(target: target) }
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.red)
                 .controlSize(.small)
             } else {
-                Button(isRunning ? "Activate" : "Launch") {
+                Button(isRunning ? "激活窗口" : "启动") {
                     Task { await appState.launchOrActivate(target: target) }
                 }
                 .buttonStyle(.bordered)
@@ -260,13 +260,13 @@ struct MenuBarView: View {
             }
         case .cliTool:
             let installed = appState.cliShimStatuses[target.id] ?? false
-            Button(installed ? "Update" : "Install") {
+            Button(installed ? "更新" : "安装") {
                 Task { await appState.installCLIShim(for: target) }
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
         case .t3Integration:
-            Button("Sync") {
+            Button("同步") {
                 Task { await appState.syncT3Code(for: target) }
             }
             .buttonStyle(.bordered)
@@ -277,12 +277,12 @@ struct MenuBarView: View {
     private var nodeControlSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Outlet Node")
+                Text("出口节点")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
                 if let syncedAt = appState.lastSyncResult?.syncedAt {
-                    Text("Synced \(syncedAt, style: .relative) ago")
+                    Text("上次同步：\(AppState.relativeTimeString(from: syncedAt))")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -291,7 +291,7 @@ struct MenuBarView: View {
             HStack(spacing: 8) {
                 let nodes = appState.quickSelectableNodes
                 Picker(
-                    "Active Node",
+                    "当前节点",
                     selection: Binding(
                         get: { appState.activeMihomoNode ?? appState.config.primaryOutlet()?.primaryNodeName ?? "" },
                         set: { newNode in
@@ -301,7 +301,7 @@ struct MenuBarView: View {
                     )
                 ) {
                     if nodes.isEmpty {
-                        Text("No nodes synced").tag("")
+                        Text("暂无已同步节点").tag("")
                     } else {
                         ForEach(nodes, id: \.self) { node in
                             Text(node).tag(node)
@@ -318,7 +318,7 @@ struct MenuBarView: View {
                         ProgressView()
                             .controlSize(.small)
                     } else {
-                        Label("Sync Now", systemImage: "arrow.triangle.2.circlepath")
+                        Label("立即同步", systemImage: "arrow.triangle.2.circlepath")
                     }
                 }
                 .buttonStyle(.bordered)
@@ -331,7 +331,7 @@ struct MenuBarView: View {
     private var footerSection: some View {
         VStack(spacing: 8) {
             Toggle(
-                "Launch at Login",
+                "开机自动启动",
                 isOn: Binding(
                     get: { appState.launchAtLogin },
                     set: { appState.setLaunchAtLogin($0) }
@@ -347,14 +347,14 @@ struct MenuBarView: View {
                     NSApp.setActivationPolicy(.regular)
                     NSApp.activate(ignoringOtherApps: true)
                 } label: {
-                    Label("Open Dashboard", systemImage: "macwindow")
+                    Label("打开控制台", systemImage: "macwindow")
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
 
                 Spacer()
 
-                Button("Quit PinGate") {
+                Button("退出 PinGate") {
                     appState.quitApp()
                 }
                 .buttonStyle(.bordered)

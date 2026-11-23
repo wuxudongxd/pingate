@@ -7,9 +7,9 @@ public enum CaptureMode: String, Codable, Sendable, CaseIterable, Hashable {
     public var displayName: String {
         switch self {
         case .userSpace:
-            return "User-Space Managed (Phase 1-2)"
+            return "用户态托管模式（阶段 1–2）"
         case .systemExtension:
-            return "System Extension Transparent Proxy (Phase 3)"
+            return "系统扩展透明代理（阶段 3）"
         }
     }
 }
@@ -34,13 +34,13 @@ public enum OutletSource: Codable, Sendable, Equatable, Hashable {
     public var kindDisplayName: String {
         switch self {
         case .localClashProfile:
-            return "Local Clash / FlClash Profile"
+            return "本地 Clash / FlClash 配置"
         case .remoteSubscription:
-            return "Remote Subscription URL"
+            return "远程订阅 URL"
         case .manualYAML:
-            return "Manual YAML Proxy"
+            return "手动 YAML 节点"
         case .upstreamProxy:
-            return "Upstream HTTP/SOCKS5 Proxy"
+            return "上游 HTTP/SOCKS5 代理"
         }
     }
 }
@@ -116,11 +116,11 @@ public enum TargetKind: String, Codable, Sendable, CaseIterable, Hashable {
     public var displayName: String {
         switch self {
         case .guiApp:
-            return "GUI Application"
+            return "桌面应用"
         case .cliTool:
-            return "CLI Tool Shim"
+            return "CLI 命令封装"
         case .t3Integration:
-            return "T3 Code Provider Sync"
+            return "T3 Code 配置同步"
         }
     }
 }
@@ -372,7 +372,7 @@ public struct PinGateConfig: Codable, Sendable, Equatable {
     ) -> PinGateConfig {
         let profilePath = discoveredProfilePath ?? discoverFlClashProfiles().first?.path ?? ""
         let outlet = OutletConfig(
-            name: "Primary Outlet",
+            name: "主出口",
             listenHost: "127.0.0.1",
             listenPort: defaultOutletPort,
             controllerPort: defaultControllerPort,

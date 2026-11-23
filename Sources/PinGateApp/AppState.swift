@@ -41,7 +41,7 @@ final class AppState {
     var t3SyncStatuses: [UUID: Bool] = [:]
     var discoveredFlClashProfiles: [URL] = []
     var launchAtLogin: Bool = false
-    var captureModeStatusMessage: String = "User-Space Managed mode active (NSWorkspace launcher + CLI shims + T3 sync + libproc leak auditor)."
+    var captureModeStatusMessage: String = "用户态托管模式运行中（NSWorkspace 启动注入 + CLI Shim + T3 Code 同步 + libproc 防漏审计）。"
 
     // MARK: - Internal Lifecycle
     private var hasBootstrapped = false
@@ -83,6 +83,30 @@ final class AppState {
             return ConfigStore(baseDirectory: URL(fileURLWithPath: expanded, isDirectory: true))
         }
         return ConfigStore()
+    }
+
+    // MARK: - Chinese Date & Time Formatters
+
+    static func relativeTimeString(from date: Date, now: Date = Date()) -> String {
+        let seconds = max(0, Int(now.timeIntervalSince(date)))
+        if seconds < 10 {
+            return "刚刚"
+        } else if seconds < 60 {
+            return "\(seconds) 秒前"
+        } else if seconds < 3600 {
+            return "\(seconds / 60) 分钟前"
+        } else if seconds < 86400 {
+            return "\(seconds / 3600) 小时前"
+        } else {
+            return "\(seconds / 86400) 天前"
+        }
+    }
+
+    static func clockTimeString(from date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter.string(from: date)
     }
 
     // MARK: - Computed Status Helpers
@@ -140,20 +164,27 @@ final class AppState {
         guard !hasBootstrapped else { return }
         hasBootstrapped = true
 
-        requestNotificationPermissionIfBundled()
+        let isSnapshotRun = CommandLine.arguments.contains("--snapshot")
+            || CommandLine.arguments.contains("--snapshot-menubar")
+
+        if !isSnapshotRun {
+            requestNotificationPermissionIfBundled()
+        }
         discoveredFlClashProfiles = ConfigStore.discoverFlClashProfiles()
         refreshTargetStatuses()
 
         let interceptorStatus = await interceptor.status()
         captureModeStatusMessage = interceptorStatus.detail
 
-        configureProfileWatchers()
+        if !isSnapshotRun {
+            configureProfileWatchers()
+        }
 
         if let primary = config.primaryOutlet() {
             await refreshAvailableNodes(for: primary)
             await refreshOutletRuntimeStatus(for: primary)
 
-            let disableAutostart = CommandLine.arguments.contains("--no-autostart")
+            let disableAutostart = CommandLine.arguments.contains("--no-autostart") || isSnapshotRun
             if !disableAutostart && primary.enabled && !outletRunning && !primary.primaryNodeName.isEmpty {
                 await startOutlet(primary)
             } else if outletRunning {
@@ -163,7 +194,9 @@ final class AppState {
 
         await refreshAudit()
         await refreshActiveConnections()
-        startPollingLoop()
+        if !isSnapshotRun {
+            startPollingLoop()
+        }
     }
 
     private func startPollingLoop() {
@@ -190,48 +223,48 @@ final class AppState {
 
     func startOutlet(_ outlet: OutletConfig? = nil) async {
         guard let targetOutlet = outlet ?? config.primaryOutlet() else {
-            lastSyncError = "No outlet configured."
+            lastSyncError = "尚未配置任何出口通道。"
             return
         }
         lastSyncError = nil
-        statusBannerMessage = "Starting \(targetOutlet.name)…"
+        statusBannerMessage = "正在启动 \(targetOutlet.name)…"
         do {
             try await mihomoManager.start(outlet: targetOutlet, bypassRules: config.bypassRules)
             await refreshOutletRuntimeStatus(for: targetOutlet)
-            statusBannerMessage = "\(targetOutlet.name) listening on :\(targetOutlet.listenPort)"
+            statusBannerMessage = "\(targetOutlet.name) 已监听 :\(String(targetOutlet.listenPort))"
             await probeExitIP(outlet: targetOutlet)
             await refreshAudit()
             await refreshActiveConnections()
         } catch {
             lastSyncError = error.localizedDescription
-            statusBannerMessage = "Start failed"
+            statusBannerMessage = "启动失败"
         }
     }
 
     func stopOutlet(_ outlet: OutletConfig? = nil) async {
         guard let targetOutlet = outlet ?? config.primaryOutlet() else { return }
-        statusBannerMessage = "Stopping \(targetOutlet.name)…"
+        statusBannerMessage = "正在停止 \(targetOutlet.name)…"
         await mihomoManager.stop(outletID: targetOutlet.id)
         await refreshOutletRuntimeStatus(for: targetOutlet)
         activeConnections = []
-        statusBannerMessage = "\(targetOutlet.name) stopped"
+        statusBannerMessage = "\(targetOutlet.name) 已停止"
         await refreshAudit()
     }
 
     func restartOutlet(_ outlet: OutletConfig? = nil) async {
         guard let targetOutlet = outlet ?? config.primaryOutlet() else { return }
         lastSyncError = nil
-        statusBannerMessage = "Restarting \(targetOutlet.name)…"
+        statusBannerMessage = "正在重启 \(targetOutlet.name)…"
         do {
             try await mihomoManager.restart(outlet: targetOutlet, bypassRules: config.bypassRules)
             await refreshOutletRuntimeStatus(for: targetOutlet)
-            statusBannerMessage = "\(targetOutlet.name) restarted"
+            statusBannerMessage = "\(targetOutlet.name) 已重启"
             await probeExitIP(outlet: targetOutlet)
             await refreshAudit()
             await refreshActiveConnections()
         } catch {
             lastSyncError = error.localizedDescription
-            statusBannerMessage = "Restart failed"
+            statusBannerMessage = "重启失败"
         }
     }
 
@@ -240,7 +273,7 @@ final class AppState {
         guard !isSyncing else { return }
         isSyncing = true
         lastSyncError = nil
-        statusBannerMessage = "Syncing \(targetOutlet.name)…"
+        statusBannerMessage = "正在同步 \(targetOutlet.name)…"
         defer { isSyncing = false }
 
         do {
@@ -251,15 +284,15 @@ final class AppState {
             )
             lastSyncResult = result
             statusBannerMessage = result.reloadedLive
-                ? "Synced & hot-reloaded (\(result.extractedProxyNames.count) proxies)"
-                : "Rendered 0600 config (\(result.extractedProxyNames.count) proxies)"
+                ? "已同步并热重载（\(result.extractedProxyNames.count) 个节点）"
+                : "已生成 0600 权限配置（\(result.extractedProxyNames.count) 个节点）"
             await refreshOutletRuntimeStatus(for: targetOutlet)
             if outletRunning {
                 await probeExitIP(outlet: targetOutlet)
             }
         } catch {
             lastSyncError = error.localizedDescription
-            statusBannerMessage = "Sync failed"
+            statusBannerMessage = "同步失败"
         }
     }
 
@@ -269,7 +302,7 @@ final class AppState {
         do {
             try await client.selectProxy(nodeName: nodeName)
             activeMihomoNode = nodeName
-            statusBannerMessage = "Switched outlet to \(nodeName)"
+            statusBannerMessage = "已切换出口节点至 \(nodeName)"
             await probeExitIP(outlet: targetOutlet)
         } catch {
             lastSyncError = error.localizedDescription
@@ -285,7 +318,7 @@ final class AppState {
             let ms = try await client.proxyDelay(name: nodeName)
             nodeLatenciesMs[nodeName] = ms
         } catch {
-            lastSyncError = "Latency test failed for \(nodeName): \(error.localizedDescription)"
+            lastSyncError = "节点 \(nodeName) 测速失败：\(error.localizedDescription)"
         }
     }
 
@@ -307,7 +340,7 @@ final class AppState {
             let result = try await exitProber.probe(outlet: targetOutlet)
             exitProbe = result
         } catch {
-            statusBannerMessage = "Exit probe failed: \(error.localizedDescription)"
+            statusBannerMessage = "出口 IP 探测失败：\(error.localizedDescription)"
         }
     }
 
@@ -401,9 +434,8 @@ final class AppState {
             discoveredFlClashProfiles = ConfigStore.discoverFlClashProfiles()
             configureProfileWatchers()
             refreshTargetStatuses()
-            statusBannerMessage = "Configuration saved (0600)"
+            statusBannerMessage = "配置已保存（0600 权限）"
 
-            // Export Phase 3 extension policy snapshot alongside runtime config.
             let snapshotURL = configStore.runtimeDirectory.appendingPathComponent("extension-policy.json")
             let extSnapshot = interceptor.exportExtensionSnapshot(config: newConfig)
             try? extSnapshot.write(to: snapshotURL)
@@ -413,7 +445,7 @@ final class AppState {
             }
         } catch {
             lastSyncError = error.localizedDescription
-            statusBannerMessage = "Failed to save config"
+            statusBannerMessage = "保存配置失败"
         }
     }
 
@@ -465,7 +497,7 @@ final class AppState {
 
     func restartTargetWithProxy(target: ManagedTarget) async {
         guard let outlet = config.outlet(id: target.outletID) ?? config.primaryOutlet() else { return }
-        statusBannerMessage = "Restarting \(target.name) with outlet :\(outlet.listenPort)…"
+        statusBannerMessage = "正在通过出口 :\(String(outlet.listenPort)) 重启 \(target.name)…"
         do {
             let outcome = try await interceptor.launchTarget(
                 target,
@@ -484,15 +516,15 @@ final class AppState {
     private func handleLaunchOutcome(_ outcome: AppLaunchOutcome) {
         switch outcome {
         case .launched(_, let name, let port):
-            statusBannerMessage = "Launched \(name) pinned to :\(port)"
+            statusBannerMessage = "已启动 \(name)，固定至出口 :\(String(port))"
         case .activatedExisting(_, let name):
-            statusBannerMessage = "Activated protected \(name)"
+            statusBannerMessage = "已激活受保护的 \(name)"
         case .runningWithoutProxy(_, let name, let port):
-            statusBannerMessage = "\(name) is running without :\(port) — click Restart with Proxy"
+            statusBannerMessage = "\(name) 未走出口 :\(String(port)) — 请点击「用代理重启」"
         case .restartedWithProxy(_, _, let name, let port):
-            statusBannerMessage = "Restarted \(name) with proxy :\(port)"
+            statusBannerMessage = "已通过出口 :\(String(port)) 重启 \(name)"
         case .blockedPortClosed(let host, let port, let name):
-            lastSyncError = "Fail-Closed: \(name) launch blocked because \(host):\(port) is not listening."
+            lastSyncError = "Fail-Closed 拦截：本地出口 \(host):\(String(port)) 未监听，已阻止启动 \(name)。"
         }
     }
 
@@ -504,7 +536,7 @@ final class AppState {
                 outlet: outlet,
                 bypassRules: config.bypassRules
             )
-            statusBannerMessage = "Installed CLI shim at \(url.path)"
+            statusBannerMessage = "已安装 CLI Shim：\(url.path)"
             refreshTargetStatuses()
         } catch {
             lastSyncError = error.localizedDescription
@@ -515,7 +547,7 @@ final class AppState {
         guard let cmd = target.cliCommandName else { return }
         do {
             _ = try interceptor.shimManager.removeShim(commandName: cmd)
-            statusBannerMessage = "Removed CLI shim \(cmd)"
+            statusBannerMessage = "已移除 CLI Shim：\(cmd)"
             refreshTargetStatuses()
         } catch {
             lastSyncError = error.localizedDescription
@@ -531,8 +563,8 @@ final class AppState {
                 bypassRules: config.bypassRules
             )
             statusBannerMessage = result.changed
-                ? "Synced T3 Code (\(result.providerKey)) with backup"
-                : "T3 Code (\(result.providerKey)) already in sync"
+                ? "已同步 T3 Code（\(result.providerKey)）并自动备份"
+                : "T3 Code（\(result.providerKey)）已是最新状态"
             refreshTargetStatuses()
         } catch {
             lastSyncError = error.localizedDescription
@@ -555,9 +587,9 @@ final class AppState {
         }
         if addedCount > 0 {
             await saveConfig(cfg, triggerSync: false)
-            statusBannerMessage = "Applied template '\(template.name)' (+\(addedCount))"
+            statusBannerMessage = "已应用模板「\(template.name)」（新增 \(addedCount) 项）"
         } else {
-            statusBannerMessage = "Template '\(template.name)' targets already present"
+            statusBannerMessage = "模板「\(template.name)」中的所有目标已存在"
         }
     }
 
@@ -608,7 +640,7 @@ final class AppState {
     func setLaunchAtLogin(_ enabled: Bool) {
         guard isBundledApp else {
             launchAtLogin = false
-            statusBannerMessage = "Launch at Login requires running from PinGate.app bundle"
+            statusBannerMessage = "开机自启需要从 PinGate.app 应用程序包运行"
             return
         }
         do {
@@ -620,7 +652,7 @@ final class AppState {
             launchAtLogin = SMAppService.mainApp.status == .enabled
         } catch {
             launchAtLogin = Self.readLaunchAtLoginState()
-            lastSyncError = "Launch at Login update failed: \(error.localizedDescription)"
+            lastSyncError = "更新开机自启设置失败：\(error.localizedDescription)"
         }
     }
 
@@ -632,7 +664,7 @@ final class AppState {
     private func sendLeakNotification(summary: String) {
         guard isBundledApp else { return }
         let content = UNMutableNotificationContent()
-        content.title = "PinGate Leak Alert"
+        content.title = "PinGate 防漏告警"
         content.body = summary
         content.sound = .default
         let request = UNNotificationRequest(

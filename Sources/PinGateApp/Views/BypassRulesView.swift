@@ -40,14 +40,14 @@ struct BypassRulesView: View {
     private var headerRow: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Bypass Rules")
+                Text("直连白名单")
                     .font(.title2.bold())
-                Text("Keep corporate VPN domains, LAN services, and loopback addresses routed directly.")
+                Text("确保公司 VPN 内网域名、局域网服务与本机回环流量始终直连。")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Button("Reset Defaults") {
+            Button("恢复默认") {
                 draftRules = BypassRules()
                 dirty = true
             }
@@ -61,9 +61,9 @@ struct BypassRulesView: View {
                 .foregroundStyle(Color.accentColor)
                 .font(.title3)
             VStack(alignment: .leading, spacing: 3) {
-                Text("Single Source of Truth for DIRECT Routing")
+                Text("单一事实源：全局统一的 DIRECT 直连规则")
                     .font(.subheadline.weight(.semibold))
-                Text("Entries below are injected simultaneously into Mihomo (`IP-CIDR` / `DOMAIN-SUFFIX` DIRECT rules before `MATCH`), `NO_PROXY`, Chromium `--proxy-bypass-list`, CLI shims, and `LeakAuditor`'s allowlist so corporate VPN (`utun`) traffic never breaks or triggers false leak alerts.")
+                Text("以下条目会同步下发至 mihomo（位于 MATCH 之前的 IP-CIDR / DOMAIN-SUFFIX DIRECT 规则）、NO_PROXY、Chromium --proxy-bypass-list、CLI Shim 与防漏审计白名单，确保公司 VPN（utun）流量不中断且不触发误报。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -77,18 +77,18 @@ struct BypassRulesView: View {
     }
 
     private var domainsCard: some View {
-        GroupBox("Corporate / Internal Bypass Domains") {
+        GroupBox("公司 / 内网直连域名") {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    TextField("e.g. .corp.example.com", text: $newDomain)
+                    TextField("如 .corp.example.com", text: $newDomain)
                         .textFieldStyle(.roundedBorder)
                         .onSubmit { addDomain() }
-                    Button("Add") { addDomain() }
+                    Button("添加") { addDomain() }
                         .disabled(newDomain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
 
                 if draftRules.domains.isEmpty {
-                    Text("No custom bypass domains configured. Add internal corporate domains here so they route directly via your system/VPN stack.")
+                    Text("暂未配置自定义直连域名。在此添加公司内网域名后缀，使其继续通过系统/VPN 栈直连。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .padding(.vertical, 8)
@@ -120,13 +120,13 @@ struct BypassRulesView: View {
     }
 
     private var cidrsCard: some View {
-        GroupBox("Private & Direct IP CIDRs") {
+        GroupBox("私网与直连 IP CIDR") {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    TextField("e.g. 10.0.0.0/8", text: $newCIDR)
+                    TextField("如 10.0.0.0/8", text: $newCIDR)
                         .textFieldStyle(.roundedBorder)
                         .onSubmit { addCIDR() }
-                    Button("Add") { addCIDR() }
+                    Button("添加") { addCIDR() }
                         .disabled(newCIDR.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
 
@@ -156,13 +156,13 @@ struct BypassRulesView: View {
     }
 
     private var extraNoProxyCard: some View {
-        GroupBox("Extra NO_PROXY Hosts") {
+        GroupBox("其他 NO_PROXY 主机条目") {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    TextField("e.g. localhost, *.local", text: $newNoProxy)
+                    TextField("如 localhost、*.local", text: $newNoProxy)
                         .textFieldStyle(.roundedBorder)
                         .onSubmit { addNoProxy() }
-                    Button("Add") { addNoProxy() }
+                    Button("添加") { addNoProxy() }
                         .disabled(newNoProxy.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
 
@@ -176,7 +176,7 @@ struct BypassRulesView: View {
     }
 
     private var previewCard: some View {
-        GroupBox("Generated Environment & Mihomo Rule Preview") {
+        GroupBox("生成的环境变量与规则预览") {
             VStack(alignment: .leading, spacing: 10) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("NO_PROXY")
@@ -210,11 +210,11 @@ struct BypassRulesView: View {
         HStack {
             Spacer()
             if dirty {
-                Text("Unsaved bypass changes")
+                Text("白名单有未保存的更改")
                     .font(.caption)
                     .foregroundStyle(.orange)
             }
-            Button("Save & Hot-Reload Mihomo") {
+            Button("保存并热重载 mihomo") {
                 var cfg = appState.config
                 cfg.bypassRules = draftRules
                 dirty = false

@@ -30,15 +30,15 @@ public enum AppLaunchError: Error, LocalizedError, Sendable {
     public var errorDescription: String? {
         switch self {
         case .unsupportedTargetKind(let name):
-            return "Target '\(name)' is not a GUI application."
+            return "目标「\(name)」不是 GUI 应用类型。"
         case .missingAppPath(let name):
-            return "Target '\(name)' does not specify an appPath."
+            return "目标「\(name)」未配置应用路径（appPath）。"
         case .appNotFound(let path):
-            return "Application bundle not found at \(path)."
+            return "未在 \(path) 找到应用程序包。"
         case .failedToTerminateExisting(let pids):
-            return "Could not terminate existing unproxied process(es): \(pids.map(String.init).joined(separator: ", "))."
+            return "无法结束未走代理的已有进程（PID：\(pids.map(String.init).joined(separator: ", "))）。"
         case .launchFailed(let message):
-            return "Failed to launch application: \(message)"
+            return "启动应用失败：\(message)"
         }
     }
 }

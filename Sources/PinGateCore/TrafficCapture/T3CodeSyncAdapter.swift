@@ -8,11 +8,11 @@ public enum T3SyncError: Error, LocalizedError, Sendable, Equatable {
     public var errorDescription: String? {
         switch self {
         case .settingsFileNotFound(let path):
-            return "T3 Code settings.json not found at \(path)."
+            return "未在 \(path) 找到 T3 Code 配置文件 settings.json。"
         case .invalidJSONStructure(let detail):
-            return "Invalid T3 Code settings.json structure: \(detail)."
+            return "T3 Code settings.json 结构无效：\(detail)。"
         case .providerNotFound(let key):
-            return "Provider instance '\(key)' not found in T3 Code settings.json."
+            return "在 T3 Code settings.json 中未找到 Provider 实例「\(key)」。"
         }
     }
 }
@@ -107,11 +107,11 @@ public struct T3CodeSyncAdapter: Sendable {
 
         let originalData = try Data(contentsOf: settingsURL)
         guard var root = try JSONSerialization.jsonObject(with: originalData) as? [String: Any] else {
-            throw T3SyncError.invalidJSONStructure("Root JSON value must be an object")
+            throw T3SyncError.invalidJSONStructure("JSON 根节点必须为对象")
         }
 
         guard var providerInstances = root["providerInstances"] as? [String: Any] else {
-            throw T3SyncError.invalidJSONStructure("Missing 'providerInstances' object")
+            throw T3SyncError.invalidJSONStructure("缺少 providerInstances 字段")
         }
 
         guard var provider = providerInstances[providerKey] as? [String: Any] else {

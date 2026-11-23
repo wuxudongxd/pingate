@@ -283,16 +283,28 @@ if legacy_cfg.is_file():
 
     # Prefer the target referenced by MATCH rule (if it matches a declared proxy),
     # otherwise prefer a node with dialer-proxy, otherwise the first proxy name.
+    # Only names under the top-level `proxies:` section are real nodes; names under
+    # `proxy-groups:` must never be seeded as primaryNodeName.
     proxy_names = []
+    group_names = set()
     chained_nodes = []
     current_name = None
+    section = ""
     for line in text.splitlines():
+        m_section = re.match(r"^([A-Za-z0-9_-]+):\s*$", line)
+        if m_section:
+            section = m_section.group(1)
+            current_name = None
+            continue
         m_name = re.match(r"^\s*-\s*name\s*:\s*(.+?)\s*$", line)
         if m_name:
             val = m_name.group(1).strip().strip('"').strip("'")
             current_name = val
-            proxy_names.append(val)
-        elif current_name and re.match(r"^\s+dialer-proxy\s*:\s*\S+", line):
+            if section == "proxies":
+                proxy_names.append(val)
+            elif section == "proxy-groups":
+                group_names.add(val)
+        elif current_name and section == "proxies" and re.match(r"^\s+dialer-proxy\s*:\s*\S+", line):
             chained_nodes.append(current_name)
         m_dom = re.match(r"^\s*-\s*['\"]?DOMAIN-SUFFIX,([^,'\"\s]+),DIRECT", line)
         if m_dom:
@@ -306,6 +318,40 @@ if legacy_cfg.is_file():
         primary_node = chained_nodes[0]
     elif proxy_names:
         primary_node = proxy_names[0]
+
+    # If PyYAML is available, resolve a proxy-group target to its first concrete
+    # node. This handles profiles whose MATCH rule points at a selector group.
+    try:
+        import yaml as _yaml
+    except Exception:
+        _yaml = None
+    if _yaml is not None:
+        try:
+            data = _yaml.safe_load(text) or {}
+            proxies = {p.get("name"): p for p in (data.get("proxies") or []) if isinstance(p, dict)}
+            groups = {g.get("name"): g for g in (data.get("proxy-groups") or []) if isinstance(g, dict)}
+
+            def resolve_node(name, stack=()):
+                if name in proxies:
+                    return name
+                if name in groups and name not in stack:
+                    for member in groups[name].get("proxies") or []:
+                        resolved = resolve_node(str(member), stack + (name,))
+                        if resolved:
+                            return resolved
+                return None
+
+            if primary_node:
+                resolved = resolve_node(primary_node)
+                if resolved:
+                    primary_node = resolved
+            if not primary_node:
+                for candidate in chained_nodes + proxy_names:
+                    if candidate in proxies:
+                        primary_node = candidate
+                        break
+        except Exception:
+            pass
 
 # 3. Extract custom bypass domains from T3 Code settings.json NO_PROXY (if present)
 t3_file = pathlib.Path(t3_path)
@@ -471,10 +517,10 @@ if [[ "${MODE}" == "dry-run" ]]; then
 else
     echo "Migration applied successfully."
     if [[ -x "${PINGATE_MIHOMO}" ]]; then
-        echo "  PinGate mihomo: ${PINGATE_MIHOMO} ($(stat -f '%Lp' "${PINGATE_MIHOMO}"))"
+        echo "  PinGate mihomo: ${PINGATE_MIHOMO} ($(/usr/bin/stat -f '%Lp' "${PINGATE_MIHOMO}"))"
     fi
     if [[ -f "${PINGATE_CONFIG}" ]]; then
-        echo "  PinGate config: ${PINGATE_CONFIG} ($(stat -f '%Lp' "${PINGATE_CONFIG}"))"
+        echo "  PinGate config: ${PINGATE_CONFIG} ($(/usr/bin/stat -f '%Lp' "${PINGATE_CONFIG}"))"
     fi
     echo "  Legacy files moved to ~/.Trash are recoverable if rollback is needed."
 fi

@@ -11,15 +11,15 @@ public enum MihomoBinaryError: Error, LocalizedError, Sendable {
     public var errorDescription: String? {
         switch self {
         case .binaryNotFound(let message):
-            return "Mihomo binary not found: \(message)"
+            return "未找到 mihomo 可执行文件：\(message)"
         case .checksumMismatch(let expected, let actual):
-            return "Mihomo binary SHA-256 mismatch: expected \(expected), got \(actual)"
+            return "mihomo 二进制 SHA-256 校验不匹配：期望 \(expected)，实际 \(actual)"
         case .downloadFailed(let message):
-            return "Failed to download Mihomo binary: \(message)"
+            return "下载 mihomo 二进制失败：\(message)"
         case .decompressionFailed(let message):
-            return "Failed to decompress Mihomo archive: \(message)"
+            return "解压 mihomo 压缩包失败：\(message)"
         case .executionFailed(let message):
-            return "Failed to execute Mihomo binary: \(message)"
+            return "执行 mihomo 二进制失败：\(message)"
         }
     }
 }
@@ -119,7 +119,7 @@ public struct MihomoBinaryManager: Sendable {
         }
 
         if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-            throw MihomoBinaryError.downloadFailed("HTTP \(http.statusCode) from \(downloadURL.absoluteString)")
+            throw MihomoBinaryError.downloadFailed("下载返回 HTTP \(http.statusCode)（\(downloadURL.absoluteString)）")
         }
 
         let stagingURL = binDirectory.appendingPathComponent(".mihomo-download-\(UUID().uuidString)")
@@ -159,7 +159,7 @@ public struct MihomoBinaryManager: Sendable {
         }
 
         throw MihomoBinaryError.binaryNotFound(
-            "Managed binary missing at \(binaryURL.path) and no seed binary found."
+            "托管路径 \(binaryURL.path) 不存在，且未找到可用的本地种子二进制文件。"
         )
     }
 
@@ -188,7 +188,7 @@ public struct MihomoBinaryManager: Sendable {
         let output = String(data: outData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if process.terminationStatus != 0 {
             let errText = String(data: errData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            throw MihomoBinaryError.executionFailed(errText.isEmpty ? "Exit code \(process.terminationStatus)" : errText)
+            throw MihomoBinaryError.executionFailed(errText.isEmpty ? "退出码 \(process.terminationStatus)" : errText)
         }
         return output
     }
@@ -214,7 +214,7 @@ public struct MihomoBinaryManager: Sendable {
         process.waitUntilExit()
 
         guard process.terminationStatus == 0, !outData.isEmpty else {
-            let errText = String(data: errData, encoding: .utf8) ?? "gunzip exited with \(process.terminationStatus)"
+            let errText = String(data: errData, encoding: .utf8) ?? "gunzip 解压失败，退出码 \(process.terminationStatus)"
             throw MihomoBinaryError.decompressionFailed(errText)
         }
         return outData

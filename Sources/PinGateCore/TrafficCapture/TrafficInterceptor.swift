@@ -225,7 +225,7 @@ public struct UserSpaceInterceptor: TrafficInterceptor, Sendable {
 
         for target in config.targets where target.enabled {
             guard let outlet = config.outlet(id: target.outletID) ?? config.primaryOutlet() else {
-                warnings.append("Target '\(target.name)' has no configured outlet.")
+                warnings.append("目标「\(target.name)」未绑定有效出口通道。")
                 continue
             }
 
@@ -239,7 +239,7 @@ public struct UserSpaceInterceptor: TrafficInterceptor, Sendable {
                     )
                     syncedShims.append(url.path)
                 } catch {
-                    warnings.append("CLI shim '\(target.name)' skipped: \(error.localizedDescription)")
+                    warnings.append("CLI Shim「\(target.name)」已跳过：\(error.localizedDescription)")
                 }
 
             case .t3Integration:
@@ -249,11 +249,11 @@ public struct UserSpaceInterceptor: TrafficInterceptor, Sendable {
                         outlet: outlet,
                         bypassRules: config.bypassRules
                     )
-                    syncedT3.append("\(result.providerKey) (\(result.changed ? "updated" : "in-sync"))")
+                    syncedT3.append("\(result.providerKey)（\(result.changed ? "已更新" : "已是最新")）")
                 } catch T3SyncError.settingsFileNotFound(let path) {
-                    warnings.append("T3 settings not found at \(path); skipped.")
+                    warnings.append("未找到 T3 Code 配置文件 \(path)，已跳过同步。")
                 } catch {
-                    warnings.append("T3 sync '\(target.name)' warning: \(error.localizedDescription)")
+                    warnings.append("T3 Code 同步「\(target.name)」警告：\(error.localizedDescription)")
                 }
 
             case .guiApp:
@@ -269,7 +269,7 @@ public struct UserSpaceInterceptor: TrafficInterceptor, Sendable {
                 try snapshot.write(to: snapshotURL)
                 writtenSnapshotPath = snapshotURL.path
             } catch {
-                warnings.append("Failed to write extension rule snapshot: \(error.localizedDescription)")
+                warnings.append("写入系统扩展规则快照失败：\(error.localizedDescription)")
             }
         }
 
@@ -302,7 +302,7 @@ public struct UserSpaceInterceptor: TrafficInterceptor, Sendable {
         InterceptorStatus(
             mode: .userSpace,
             isActive: true,
-            detail: "User-Space Managed mode active (NSWorkspace launcher + CLI shims + T3 sync + libproc leak auditor).",
+            detail: "用户态托管模式已启用（NSWorkspace 代理启动器 + CLI Shim + T3 Code 同步 + libproc 实时防漏审计）。",
             extensionAvailable: false
         )
     }

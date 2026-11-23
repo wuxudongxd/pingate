@@ -9,13 +9,13 @@ public enum MihomoAPIError: Error, LocalizedError, Sendable {
     public var errorDescription: String? {
         switch self {
         case .invalidURL(let path):
-            return "Invalid Mihomo Controller URL path: \(path)"
+            return "mihomo 控制器请求路径无效：\(path)"
         case .transportError(let detail):
-            return "Mihomo Controller connection error: \(detail)"
+            return "连接 mihomo 控制器失败：\(detail)"
         case .httpError(let statusCode, let body):
-            return "Mihomo Controller returned HTTP \(statusCode): \(body)"
+            return "mihomo 控制器返回 HTTP \(statusCode)：\(body)"
         case .decodingError(let detail):
-            return "Failed to decode Mihomo Controller response: \(detail)"
+            return "解析 mihomo 控制器响应失败：\(detail)"
         }
     }
 }
@@ -65,7 +65,7 @@ public struct MihomoAPIClient: Sendable {
                 let latestDelay = raw.history?.last?.delay
                 result[name] = MihomoProxyNode(
                     name: raw.name ?? name,
-                    type: raw.type ?? "Unknown",
+                    type: raw.type ?? "未知",
                     now: raw.now,
                     all: raw.all,
                     alive: raw.alive,
@@ -198,7 +198,7 @@ public struct MihomoAPIClient: Sendable {
         }
 
         guard let httpResponse = response as? HTTPURLResponse else {
-            throw MihomoAPIError.transportError("Non-HTTP response received")
+            throw MihomoAPIError.transportError("收到非 HTTP 响应")
         }
         guard (200...299).contains(httpResponse.statusCode) else {
             let bodyText = String(data: data, encoding: .utf8) ?? ""

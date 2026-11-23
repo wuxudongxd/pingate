@@ -4,7 +4,10 @@ import SwiftUI
 
 final class PinGateAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
-        if CommandLine.arguments.contains("--open-dashboard") || CommandLine.arguments.contains("--snapshot") {
+        if CommandLine.arguments.contains("--open-dashboard")
+            || CommandLine.arguments.contains("--snapshot")
+            || CommandLine.arguments.contains("--snapshot-menubar")
+        {
             NSApp.setActivationPolicy(.regular)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                 NSApp.activate(ignoringOtherApps: true)
@@ -27,7 +30,7 @@ struct PinGateApp: App {
         self._appState = State(initialValue: state)
         Task { @MainActor in
             await state.bootstrapIfNeeded()
-            await Self.captureSnapshotIfRequested(appState: state)
+            await Self.captureSnapshotsIfRequested(appState: state)
         }
     }
 
@@ -43,7 +46,7 @@ struct PinGateApp: App {
         }
         .menuBarExtraStyle(.window)
 
-        Window("PinGate Dashboard", id: "dashboard") {
+        Window("PinGate 控制台", id: "dashboard") {
             DashboardView(appState: appState)
                 .frame(minWidth: 920, minHeight: 620)
                 .task {
@@ -58,32 +61,80 @@ struct PinGateApp: App {
     }
 
     @MainActor
-    private static func captureSnapshotIfRequested(appState: AppState) async {
+    private static func captureSnapshotsIfRequested(appState: AppState) async {
         let args = CommandLine.arguments
-        guard let idx = args.firstIndex(of: "--snapshot"), args.indices.contains(idx + 1) else {
+        let dashboardPath: String? = {
+            guard let idx = args.firstIndex(of: "--snapshot"), args.indices.contains(idx + 1) else {
+                return nil
+            }
+            return args[idx + 1]
+        }()
+        let menuBarPath: String? = {
+            guard let idx = args.firstIndex(of: "--snapshot-menubar"), args.indices.contains(idx + 1) else {
+                return nil
+            }
+            return args[idx + 1]
+        }()
+
+        guard dashboardPath != nil || menuBarPath != nil else {
             return
         }
-        let outputPath = args[idx + 1]
+
         await appState.refreshAudit()
         await appState.refreshActiveConnections()
 
-        let hosting = NSHostingController(rootView: DashboardView(appState: appState))
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1060, height: 700),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
-            backing: .buffered,
-            defer: false
-        )
-        window.title = "PinGate Dashboard"
-        window.contentViewController = hosting
-        window.setContentSize(NSSize(width: 1060, height: 700))
-        window.center()
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        if let outputPath = dashboardPath {
+            let hosting = NSHostingController(rootView: DashboardView(appState: appState))
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 1060, height: 700),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                backing: .buffered,
+                defer: false
+            )
+            window.title = "PinGate 控制台"
+            window.contentViewController = hosting
+            window.setContentSize(NSSize(width: 1060, height: 700))
+            window.center()
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
 
-        try? await Task.sleep(for: .milliseconds(600))
+            try? await Task.sleep(for: .milliseconds(600))
+            saveWindowSnapshot(window: window, fallbackView: hosting.view, to: outputPath)
+            window.close()
+        }
 
-        let targetView = window.contentView?.superview ?? window.contentView ?? hosting.view
+        if let outputPath = menuBarPath {
+            let popoverRoot = MenuBarView(appState: appState)
+                .background(Color(nsColor: .windowBackgroundColor))
+            let hosting = NSHostingController(rootView: popoverRoot)
+            let fitting = hosting.view.fittingSize
+            let width = max(370, fitting.width)
+            let height = max(420, fitting.height)
+
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: width, height: height),
+                styleMask: [.titled, .closable],
+                backing: .buffered,
+                defer: false
+            )
+            window.title = "PinGate 菜单栏"
+            window.contentViewController = hosting
+            window.setContentSize(NSSize(width: width, height: height))
+            window.center()
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+
+            try? await Task.sleep(for: .milliseconds(500))
+            saveWindowSnapshot(window: window, fallbackView: hosting.view, to: outputPath)
+            window.close()
+        }
+
+        exit(0)
+    }
+
+    @MainActor
+    private static func saveWindowSnapshot(window: NSWindow, fallbackView: NSView, to outputPath: String) {
+        let targetView = window.contentView?.superview ?? window.contentView ?? fallbackView
         targetView.layoutSubtreeIfNeeded()
         let bounds = targetView.bounds
         if let rep = targetView.bitmapImageRepForCachingDisplay(in: bounds) {
@@ -92,16 +143,14 @@ struct PinGateApp: App {
                 try? png.write(to: URL(fileURLWithPath: outputPath), options: .atomic)
             }
         }
-        window.close()
-        exit(0)
     }
 }
 
 enum DashboardSection: String, CaseIterable, Identifiable {
-    case outlets = "Outlets"
-    case targets = "Targets"
-    case bypass = "Bypass Rules"
-    case audit = "Audit & Monitor"
+    case outlets = "出口通道"
+    case targets = "纳管目标"
+    case bypass = "直连白名单"
+    case audit = "防漏审计"
 
     var id: String { rawValue }
 
@@ -121,13 +170,13 @@ enum DashboardSection: String, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .outlets:
-            return "Proxy sources, nodes & latency"
+            return "代理源、节点与延迟测试"
         case .targets:
-            return "Apps, CLI shims & T3 Code"
+            return "应用、CLI Shim 与 T3 Code"
         case .bypass:
-            return "Corporate domains & private CIDRs"
+            return "公司内网域名与私有 CIDR"
         case .audit:
-            return "Live socket audit & connections"
+            return "实时 Socket 审计与活跃连接"
         }
     }
 }
@@ -158,7 +207,7 @@ struct DashboardView: View {
                 Button {
                     Task { await appState.syncNow() }
                 } label: {
-                    Label(appState.isSyncing ? "Syncing…" : "Sync Now", systemImage: "arrow.triangle.2.circlepath")
+                    Label(appState.isSyncing ? "同步中…" : "立即同步", systemImage: "arrow.triangle.2.circlepath")
                 }
                 .disabled(appState.isSyncing)
 
@@ -168,7 +217,7 @@ struct DashboardView: View {
                         await appState.refreshActiveConnections()
                     }
                 } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
+                    Label("刷新", systemImage: "arrow.clockwise")
                 }
             }
         }
@@ -218,13 +267,13 @@ struct DashboardView: View {
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
                     } else {
-                        Text("No Outlet")
+                        Text("未配置出口")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
                     let leaks = appState.auditSnapshot?.totalLeakSockets ?? 0
-                    Text(leaks == 0 ? "0 leaks" : "\(leaks) leaks")
+                    Text(leaks == 0 ? "0 漏网" : "\(String(leaks)) 处漏网")
                         .font(.caption2.weight(.semibold))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
@@ -254,7 +303,7 @@ struct DashboardView: View {
                         }
                         Spacer()
                         if section == .audit, let leaks = appState.auditSnapshot?.totalLeakSockets, leaks > 0 {
-                            Text("\(leaks)")
+                            Text(String(leaks))
                                 .font(.caption2.bold())
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 1)
@@ -288,7 +337,7 @@ struct DashboardView: View {
                         Image(systemName: "globe")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Text(appState.isProbingExitIP ? "Probing exit IP…" : "Exit IP not probed")
+                        Text(appState.isProbingExitIP ? "正在探测出口 IP…" : "尚未探测出口 IP")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Spacer()
@@ -296,7 +345,7 @@ struct DashboardView: View {
                 }
 
                 HStack(spacing: 8) {
-                    Button(appState.outletRunning ? "Stop Outlet" : "Start Outlet") {
+                    Button(appState.outletRunning ? "停止出口" : "启动出口") {
                         Task {
                             if appState.outletRunning {
                                 await appState.stopOutlet()
@@ -308,7 +357,7 @@ struct DashboardView: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
 
-                    Button("Probe IP") {
+                    Button("探测 IP") {
                         Task { await appState.probeExitIP() }
                     }
                     .buttonStyle(.bordered)

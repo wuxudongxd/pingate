@@ -8,9 +8,9 @@ public enum MihomoConfigRendererError: Error, LocalizedError, Sendable {
     public var errorDescription: String? {
         switch self {
         case .emptyProxyList:
-            return "Cannot render Mihomo config with zero proxies."
+            return "代理节点列表为空，无法生成 mihomo 配置。"
         case .serializationFailed(let detail):
-            return "Failed to serialize Mihomo YAML: \(detail)"
+            return "序列化 mihomo YAML 配置失败：\(detail)"
         }
     }
 }
@@ -129,7 +129,7 @@ public struct MihomoConfigRenderer: Sendable {
     ) throws {
         let yaml = try renderYAML(outlet: outlet, chain: chain, bypassRules: bypassRules)
         guard let data = yaml.data(using: .utf8) else {
-            throw MihomoConfigRendererError.serializationFailed("Unable to encode YAML as UTF-8.")
+            throw MihomoConfigRendererError.serializationFailed("无法将 YAML 编码为 UTF-8 文本。")
         }
         try ConfigStore.atomicWrite(data: data, to: destinationURL, posixPermissions: 0o600)
     }

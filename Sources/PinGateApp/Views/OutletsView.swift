@@ -3,10 +3,10 @@ import PinGateCore
 import SwiftUI
 
 private enum SourceKindTab: String, CaseIterable, Identifiable {
-    case localProfile = "Local Profile"
-    case remoteSubscription = "Subscription URL"
-    case manualYAML = "Manual YAML"
-    case upstreamProxy = "Upstream Proxy"
+    case localProfile = "本地 Clash 配置"
+    case remoteSubscription = "远程订阅 URL"
+    case manualYAML = "手动 YAML"
+    case upstreamProxy = "上游代理"
 
     var id: String { rawValue }
 }
@@ -44,9 +44,9 @@ struct OutletsView: View {
                     actionBar
                 } else {
                     ContentUnavailableView(
-                        "No Outlets Configured",
+                        "尚未配置出口通道",
                         systemImage: "network.slash",
-                        description: Text("Add an outlet to pin applications to a fixed proxy node.")
+                        description: Text("添加一个出口通道，将目标应用固定到指定代理节点。")
                     )
                     .padding(.vertical, 40)
                 }
@@ -66,9 +66,9 @@ struct OutletsView: View {
     private var headerRow: some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Outlets")
+                Text("出口通道")
                     .font(.title2.bold())
-                Text("Configure fixed proxy outlets, subscription sync sources, and node fallbacks.")
+                Text("配置固定代理出口、订阅自动同步源及主备节点切换。")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -76,7 +76,7 @@ struct OutletsView: View {
             Spacer()
 
             if appState.config.outlets.count > 1 {
-                Picker("Outlet", selection: Binding(
+                Picker("出口通道", selection: Binding(
                     get: { selectedOutletID ?? appState.config.outlets.first?.id ?? UUID() },
                     set: { id in
                         selectedOutletID = id
@@ -86,7 +86,7 @@ struct OutletsView: View {
                     }
                 )) {
                     ForEach(appState.config.outlets) { item in
-                        Text("\(item.name) (:\(item.listenPort))").tag(item.id)
+                        Text("\(item.name) (:\(String(item.listenPort)))").tag(item.id)
                     }
                 }
                 .frame(width: 220)
@@ -95,7 +95,7 @@ struct OutletsView: View {
             Button {
                 addNewOutlet()
             } label: {
-                Label("Add Outlet", systemImage: "plus")
+                Label("新增出口", systemImage: "plus")
             }
             .buttonStyle(.bordered)
         }
@@ -109,7 +109,7 @@ struct OutletsView: View {
                         Circle()
                             .fill(appState.outletRunning ? Color.green : Color.secondary)
                             .frame(width: 10, height: 10)
-                        Text(appState.outletRunning ? "Managed Mihomo Running" : "Outlet Stopped")
+                        Text(appState.outletRunning ? "托管 mihomo 运行中" : "出口已停止")
                             .font(.headline)
                         if let version = appState.mihomoVersion {
                             Text(version)
@@ -123,11 +123,11 @@ struct OutletsView: View {
                     HStack(spacing: 14) {
                         Label("\(outlet.listenHost):\(String(outlet.listenPort))", systemImage: "arrow.left.arrow.right")
                             .font(.caption.monospaced())
-                        Label("Controller :\(String(outlet.controllerPort))", systemImage: "slider.horizontal.3")
+                        Label("控制端口 :\(String(outlet.controllerPort))", systemImage: "slider.horizontal.3")
                             .font(.caption.monospaced())
                         if let sync = appState.lastSyncResult {
                             Label(
-                                "Extracted \(sync.extractedProxyNames.count) proxy(ies) • \(sync.syncedAt, style: .relative) ago",
+                                "已提取 \(sync.extractedProxyNames.count) 个节点 • \(AppState.relativeTimeString(from: sync.syncedAt))",
                                 systemImage: "checkmark.circle"
                             )
                             .font(.caption)
@@ -137,7 +137,7 @@ struct OutletsView: View {
 
                     if let chain = appState.lastSyncResult?.extractedProxyNames, !chain.isEmpty {
                         HStack(spacing: 6) {
-                            Text("Chain:")
+                            Text("代理链：")
                                 .font(.caption2.weight(.semibold))
                                 .foregroundStyle(.secondary)
                             ForEach(chain, id: \.self) { name in
@@ -155,7 +155,7 @@ struct OutletsView: View {
 
                 VStack(alignment: .trailing, spacing: 8) {
                     HStack(spacing: 8) {
-                        Button(appState.outletRunning ? "Restart" : "Start") {
+                        Button(appState.outletRunning ? "重启" : "启动") {
                             Task {
                                 if appState.outletRunning {
                                     await appState.restartOutlet(outlet)
@@ -167,7 +167,7 @@ struct OutletsView: View {
                         .buttonStyle(.borderedProminent)
 
                         if appState.outletRunning {
-                            Button("Stop") {
+                            Button("停止") {
                                 Task { await appState.stopOutlet(outlet) }
                             }
                             .buttonStyle(.bordered)
@@ -175,14 +175,14 @@ struct OutletsView: View {
                     }
 
                     HStack(spacing: 8) {
-                        Button("Sync Now") {
+                        Button("立即同步") {
                             Task { await appState.syncNow(outlet: outlet) }
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                         .disabled(appState.isSyncing)
 
-                        Button("Test Latency") {
+                        Button("测试延迟") {
                             Task { await appState.testAllLatencies(outlet: outlet) }
                         }
                         .buttonStyle(.bordered)
@@ -196,19 +196,19 @@ struct OutletsView: View {
     }
 
     private func basicSettingsCard(outlet: OutletConfig) -> some View {
-        GroupBox("General & Listener") {
+        GroupBox("常规与监听配置") {
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 10) {
                 GridRow {
-                    Text("Outlet Name")
+                    Text("出口名称")
                         .foregroundStyle(.secondary)
                         .frame(width: 140, alignment: .trailing)
-                    TextField("Primary Outlet", text: binding(\.name))
+                    TextField("主出口通道", text: binding(\.name))
                         .textFieldStyle(.roundedBorder)
-                    Toggle("Enabled", isOn: binding(\.enabled))
+                    Toggle("启用", isOn: binding(\.enabled))
                 }
 
                 GridRow {
-                    Text("Listen Address")
+                    Text("监听地址")
                         .foregroundStyle(.secondary)
                         .frame(width: 140, alignment: .trailing)
                     HStack(spacing: 8) {
@@ -216,13 +216,13 @@ struct OutletsView: View {
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 130)
                         Text(":")
-                        TextField("17899", value: binding(\.listenPort), format: .number)
+                        TextField("17899", value: binding(\.listenPort), format: .number.grouping(.never))
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 85)
-                        Text("Controller Port")
+                        Text("控制端口")
                             .foregroundStyle(.secondary)
                             .padding(.leading, 8)
-                        TextField("17890", value: binding(\.controllerPort), format: .number)
+                        TextField("17890", value: binding(\.controllerPort), format: .number.grouping(.never))
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 85)
                     }
@@ -230,11 +230,11 @@ struct OutletsView: View {
                 }
 
                 GridRow {
-                    Text("Expected Region / IP")
+                    Text("预期地区 / IP")
                         .foregroundStyle(.secondary)
                         .frame(width: 140, alignment: .trailing)
                     HStack(spacing: 8) {
-                        TextField("Country (e.g. US)", text: Binding(
+                        TextField("国家代码（如 US）", text: Binding(
                             get: { draftOutlet?.expectedCountryCode ?? "" },
                             set: { val in
                                 draftOutlet?.expectedCountryCode = val.isEmpty ? nil : val.uppercased()
@@ -242,9 +242,9 @@ struct OutletsView: View {
                             }
                         ))
                         .textFieldStyle(.roundedBorder)
-                        .frame(width: 130)
+                        .frame(width: 150)
 
-                        TextField("Optional IP hint", text: Binding(
+                        TextField("可选出口 IP 提示", text: Binding(
                             get: { draftOutlet?.expectedIPHint ?? "" },
                             set: { val in
                                 draftOutlet?.expectedIPHint = val.isEmpty ? nil : val
@@ -261,9 +261,9 @@ struct OutletsView: View {
     }
 
     private var sourceConfigCard: some View {
-        GroupBox("Proxy Source") {
+        GroupBox("代理来源") {
             VStack(alignment: .leading, spacing: 12) {
-                Picker("Source Type", selection: $sourceKind) {
+                Picker("来源类型", selection: $sourceKind) {
                     ForEach(SourceKindTab.allCases) { tab in
                         Text(tab.rawValue).tag(tab)
                     }
@@ -284,14 +284,14 @@ struct OutletsView: View {
                             .textFieldStyle(.roundedBorder)
                             .onChange(of: localProfilePath) { _, _ in dirty = true }
 
-                            Button("Browse…") {
+                            Button("选择…") {
                                 browseForProfileYAML()
                             }
                         }
 
                         if !appState.discoveredFlClashProfiles.isEmpty {
                             HStack(spacing: 8) {
-                                Text("Detected FlClash Profiles:")
+                                Text("已发现的 FlClash 配置：")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                 ForEach(appState.discoveredFlClashProfiles.prefix(3), id: \.path) { url in
@@ -311,7 +311,7 @@ struct OutletsView: View {
                             }
                         }
 
-                        Text("PinGate watches this YAML file via DispatchSource and hot-reloads Mihomo automatically whenever your subscription refreshes.")
+                        Text("PinGate 通过 DispatchSource 监听该 YAML 文件变更，订阅更新时自动提取节点并热重载 mihomo。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -321,13 +321,13 @@ struct OutletsView: View {
                         TextField("https://provider.example.com/subscribe?...", text: $subscriptionURL)
                             .textFieldStyle(.roundedBorder)
                             .onChange(of: subscriptionURL) { _, _ in dirty = true }
-                        Stepper("Refresh every \(subscriptionInterval) minutes", value: $subscriptionInterval, in: 5...1440, step: 15)
+                        Stepper("每 \(subscriptionInterval) 分钟自动刷新", value: $subscriptionInterval, in: 5...1440, step: 15)
                             .onChange(of: subscriptionInterval) { _, _ in dirty = true }
                     }
 
                 case .manualYAML:
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Paste a Clash `proxies:` YAML block (stored with 0600 permissions):")
+                        Text("粘贴 Clash proxies YAML 片段（将以 0600 权限安全存储）：")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         TextEditor(text: $manualYAMLText)
@@ -343,7 +343,7 @@ struct OutletsView: View {
                 case .upstreamProxy:
                     Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
                         GridRow {
-                            Text("Scheme").foregroundStyle(.secondary)
+                            Text("协议").foregroundStyle(.secondary)
                             Picker("", selection: $upstreamScheme) {
                                 ForEach(UpstreamScheme.allCases, id: \.self) { scheme in
                                     Text(scheme.rawValue.uppercased()).tag(scheme)
@@ -354,24 +354,24 @@ struct OutletsView: View {
                             .onChange(of: upstreamScheme) { _, _ in dirty = true }
                         }
                         GridRow {
-                            Text("Host & Port").foregroundStyle(.secondary)
+                            Text("主机与端口").foregroundStyle(.secondary)
                             HStack {
                                 TextField("127.0.0.1", text: $upstreamHost)
                                     .textFieldStyle(.roundedBorder)
                                     .onChange(of: upstreamHost) { _, _ in dirty = true }
-                                TextField("7890", value: $upstreamPort, format: .number)
+                                TextField("7890", value: $upstreamPort, format: .number.grouping(.never))
                                     .textFieldStyle(.roundedBorder)
                                     .frame(width: 85)
                                     .onChange(of: upstreamPort) { _, _ in dirty = true }
                             }
                         }
                         GridRow {
-                            Text("Auth (Optional)").foregroundStyle(.secondary)
+                            Text("认证（可选）").foregroundStyle(.secondary)
                             HStack {
-                                TextField("Username", text: $upstreamUsername)
+                                TextField("用户名", text: $upstreamUsername)
                                     .textFieldStyle(.roundedBorder)
                                     .onChange(of: upstreamUsername) { _, _ in dirty = true }
-                                SecureField("Password", text: $upstreamPassword)
+                                SecureField("密码", text: $upstreamPassword)
                                     .textFieldStyle(.roundedBorder)
                                     .onChange(of: upstreamPassword) { _, _ in dirty = true }
                             }
@@ -384,17 +384,17 @@ struct OutletsView: View {
     }
 
     private func nodeSelectionCard(outlet: OutletConfig) -> some View {
-        GroupBox("Primary & Fallback Nodes (with Automatic dialer-proxy Resolution)") {
+        GroupBox("主备节点（自动递归解析 dialer-proxy 链）") {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 10) {
-                    Text("Primary Node")
+                    Text("主节点")
                         .foregroundStyle(.secondary)
                         .frame(width: 110, alignment: .trailing)
-                    TextField("Exact Clash proxy name", text: binding(\.primaryNodeName))
+                    TextField("Clash 节点精确名称", text: binding(\.primaryNodeName))
                         .textFieldStyle(.roundedBorder)
 
                     if !appState.availableProfileNodes.isEmpty {
-                        Menu("Pick from Profile") {
+                        Menu("从配置选择") {
                             ForEach(appState.availableProfileNodes, id: \.self) { node in
                                 Button(node) {
                                     draftOutlet?.primaryNodeName = node
@@ -402,14 +402,14 @@ struct OutletsView: View {
                                 }
                             }
                         }
-                        .frame(width: 150)
+                        .frame(width: 130)
                     }
 
                     if let ms = appState.nodeLatenciesMs[outlet.primaryNodeName] {
                         latencyBadge(ms)
                     }
 
-                    Button("Ping") {
+                    Button("测速") {
                         Task { await appState.testLatency(nodeName: outlet.primaryNodeName, outlet: outlet) }
                     }
                     .buttonStyle(.bordered)
@@ -420,11 +420,11 @@ struct OutletsView: View {
                 Divider()
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Fallback Nodes")
+                    Text("备用节点")
                         .font(.subheadline.weight(.medium))
 
                     if outlet.fallbackNodeNames.isEmpty {
-                        Text("No fallback nodes configured.")
+                        Text("暂未配置备用节点。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     } else {
@@ -436,7 +436,7 @@ struct OutletsView: View {
                                 if let ms = appState.nodeLatenciesMs[node] {
                                     latencyBadge(ms)
                                 }
-                                Button("Ping") {
+                                Button("测速") {
                                     Task { await appState.testLatency(nodeName: node, outlet: outlet) }
                                 }
                                 .buttonStyle(.borderless)
@@ -456,10 +456,10 @@ struct OutletsView: View {
                     }
 
                     HStack {
-                        TextField("Add fallback node name…", text: $newFallbackNode)
+                        TextField("输入备用节点名称…", text: $newFallbackNode)
                             .textFieldStyle(.roundedBorder)
                         if !appState.availableProfileNodes.isEmpty {
-                            Menu("Pick") {
+                            Menu("选择") {
                                 ForEach(appState.availableProfileNodes, id: \.self) { node in
                                     Button(node) {
                                         appendFallback(node)
@@ -467,7 +467,7 @@ struct OutletsView: View {
                                 }
                             }
                         }
-                        Button("Add") {
+                        Button("添加") {
                             appendFallback(newFallbackNode)
                             newFallbackNode = ""
                         }
@@ -482,7 +482,7 @@ struct OutletsView: View {
     private var actionBar: some View {
         HStack {
             if appState.config.outlets.count > 1, let id = draftOutlet?.id {
-                Button("Delete Outlet", role: .destructive) {
+                Button("删除出口", role: .destructive) {
                     deleteOutlet(id: id)
                 }
             }
@@ -490,12 +490,12 @@ struct OutletsView: View {
             Spacer()
 
             if dirty {
-                Text("Unsaved changes")
+                Text("有未保存的更改")
                     .font(.caption)
                     .foregroundStyle(.orange)
             }
 
-            Button("Save & Apply") {
+            Button("保存并应用") {
                 saveDraft()
             }
             .buttonStyle(.borderedProminent)
@@ -505,7 +505,7 @@ struct OutletsView: View {
 
     private func latencyBadge(_ ms: Int) -> some View {
         let color: Color = ms < 180 ? .green : (ms < 400 ? .orange : .red)
-        return Text("\(ms) ms")
+        return Text("\(String(ms)) ms")
             .font(.caption2.monospaced().weight(.semibold))
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
@@ -592,7 +592,7 @@ struct OutletsView: View {
         let nextPort = (appState.config.outlets.map(\.listenPort).max() ?? 17898) + 1
         let nextCtrl = (appState.config.outlets.map(\.controllerPort).max() ?? 17889) + 1
         let newOutlet = OutletConfig(
-            name: "Outlet \(appState.config.outlets.count + 1)",
+            name: "出口通道 \(appState.config.outlets.count + 1)",
             listenPort: nextPort,
             controllerPort: nextCtrl,
             source: .localClashProfile(path: appState.discoveredFlClashProfiles.first?.path ?? ""),
@@ -629,7 +629,7 @@ struct OutletsView: View {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.title = "Select Clash / FlClash Profile YAML"
+        panel.title = "选择 Clash / FlClash 配置文件 (YAML)"
         if panel.runModal() == .OK, let url = panel.url {
             localProfilePath = url.path
             dirty = true

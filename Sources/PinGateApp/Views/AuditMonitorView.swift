@@ -2,10 +2,10 @@ import PinGateCore
 import SwiftUI
 
 private enum SocketFilter: String, CaseIterable, Identifiable {
-    case all = "All"
-    case leaks = "Leaks"
-    case proxied = "Proxied"
-    case bypass = "Bypass"
+    case all = "全部"
+    case leaks = "仅漏网"
+    case proxied = "已代理"
+    case bypass = "直连/本地"
 
     var id: String { rawValue }
 }
@@ -48,15 +48,15 @@ struct AuditMonitorView: View {
     private var headerRow: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Real-Time Leak Audit & Monitor")
+                Text("实时防漏审计与监控")
                     .font(.title2.bold())
-                Text("Native Darwin libproc inspection (3s cadence, zero subprocess polling).")
+                Text("基于 macOS 原生 Darwin libproc 检查（每 3 秒扫描，零子进程开销）。")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
             Spacer()
             if let ts = appState.auditSnapshot?.timestamp {
-                Text("Updated \(ts, style: .time)")
+                Text("更新于 \(AppState.clockTimeString(from: ts))")
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
             }
@@ -71,30 +71,30 @@ struct AuditMonitorView: View {
 
         return HStack(spacing: 12) {
             kpiCard(
-                title: "Protection State",
+                title: "保护状态",
                 value: appState.overallHealthState.displayName,
-                subtitle: snapshot?.summary ?? "Waiting for first scan…",
+                subtitle: snapshot?.summary ?? "等待首次扫描…",
                 color: appState.healthColor,
                 icon: appState.menuBarSymbolName
             )
             kpiCard(
-                title: "Proxied Sockets",
-                value: "\(proxied)",
-                subtitle: "Verified on outlet port",
+                title: "已代理 Socket",
+                value: String(proxied),
+                subtitle: "已验证命中固定出口端口",
                 color: .green,
                 icon: "checkmark.circle.fill"
             )
             kpiCard(
-                title: "Direct Bypass",
-                value: "\(bypass)",
-                subtitle: "Private CIDR / VPN allowlisted",
+                title: "直连白名单",
+                value: String(bypass),
+                subtitle: "命中私有 CIDR / VPN 白名单",
                 color: .blue,
                 icon: "arrow.triangle.branch"
             )
             kpiCard(
-                title: "Detected Leaks",
-                value: leaks == 0 ? "0 Leaks" : "\(leaks) LEAK!",
-                subtitle: leaks == 0 ? "Zero unproxied public sockets" : "Action required",
+                title: "漏网检测",
+                value: leaks == 0 ? "0 漏网" : "\(String(leaks)) 处漏网！",
+                subtitle: leaks == 0 ? "零公网直连漏网" : "发现漏网，请立即处理",
                 color: leaks == 0 ? .green : .red,
                 icon: leaks == 0 ? "lock.shield.fill" : "exclamationmark.octagon.fill"
             )
@@ -134,9 +134,9 @@ struct AuditMonitorView: View {
 
     private var processesSection: some View {
         let processes = appState.auditSnapshot?.processes ?? []
-        return GroupBox("Managed Processes (\(processes.count))") {
+        return GroupBox("纳管进程状态（\(String(processes.count))）") {
             if processes.isEmpty {
-                Text("No running processes currently match your managed targets.")
+                Text("当前没有正在运行的纳管目标进程。")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .padding(12)
@@ -160,7 +160,7 @@ struct AuditMonitorView: View {
                             }
                             Spacer()
                             envBadge(proc.proxyEnvStatus)
-                            Text("\(proc.proxiedSocketCount) proxied")
+                            Text("\(String(proc.proxiedSocketCount)) 条代理")
                                 .font(.caption.monospaced())
                                 .foregroundStyle(.secondary)
                                 .frame(width: 74, alignment: .trailing)
@@ -169,7 +169,7 @@ struct AuditMonitorView: View {
                                let tid = proc.targetID,
                                let target = appState.config.targets.first(where: { $0.id == tid && $0.kind == .guiApp })
                             {
-                                Button("Restart with Proxy") {
+                                Button("用代理重启") {
                                     Task { await appState.restartTargetWithProxy(target: target) }
                                 }
                                 .buttonStyle(.borderedProminent)
@@ -194,20 +194,20 @@ struct AuditMonitorView: View {
         GroupBox {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Text("Live Socket Leak Audit (\(filteredSockets.count))")
+                    Text("实时 Socket 防漏审计（\(String(filteredSockets.count))）")
                         .font(.headline)
                     Spacer()
-                    Picker("Filter", selection: $socketFilter) {
+                    Picker("筛选", selection: $socketFilter) {
                         ForEach(SocketFilter.allCases) { f in
                             Text(f.rawValue).tag(f)
                         }
                     }
                     .pickerStyle(.segmented)
-                    .frame(width: 280)
+                    .frame(width: 300)
                 }
 
                 if filteredSockets.isEmpty {
-                    Text(socketFilter == .leaks ? "Zero leaked sockets detected." : "No active sockets matching filter.")
+                    Text(socketFilter == .leaks ? "未检测到任何漏网 Socket。" : "当前筛选条件下无活跃 Socket。")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .padding(.vertical, 14)
@@ -216,10 +216,10 @@ struct AuditMonitorView: View {
                     VStack(spacing: 0) {
                         HStack {
                             Text("PID").frame(width: 58, alignment: .leading)
-                            Text("Process").frame(width: 150, alignment: .leading)
-                            Text("Remote Endpoint").frame(maxWidth: .infinity, alignment: .leading)
-                            Text("State").frame(width: 96, alignment: .leading)
-                            Text("Classification").frame(width: 110, alignment: .trailing)
+                            Text("进程").frame(width: 150, alignment: .leading)
+                            Text("远端地址").frame(maxWidth: .infinity, alignment: .leading)
+                            Text("状态").frame(width: 96, alignment: .leading)
+                            Text("分类").frame(width: 110, alignment: .trailing)
                         }
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
@@ -273,10 +273,10 @@ struct AuditMonitorView: View {
         GroupBox {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Text("Live Mihomo Active Connections (\(appState.activeConnections.count))")
+                    Text("mihomo 实时活跃连接（\(String(appState.activeConnections.count))）")
                         .font(.headline)
                     Spacer()
-                    Button("Refresh") {
+                    Button("刷新") {
                         Task { await appState.refreshActiveConnections() }
                     }
                     .buttonStyle(.bordered)
@@ -285,23 +285,23 @@ struct AuditMonitorView: View {
                 }
 
                 if !appState.outletRunning {
-                    Text("Start the managed outlet to inspect active Mihomo proxy connections.")
+                    Text("请先启动托管出口以查看 mihomo 实时代理连接。")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .padding(.vertical, 10)
                 } else if appState.activeConnections.isEmpty {
-                    Text("No active connections through Mihomo right now.")
+                    Text("当前暂无经由 mihomo 的活跃连接。")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .padding(.vertical, 10)
                 } else {
                     VStack(spacing: 0) {
                         HStack {
-                            Text("Destination").frame(maxWidth: .infinity, alignment: .leading)
-                            Text("Proto").frame(width: 52, alignment: .leading)
-                            Text("Rule").frame(width: 120, alignment: .leading)
-                            Text("Chain").frame(width: 170, alignment: .leading)
-                            Text("Up / Down").frame(width: 120, alignment: .trailing)
+                            Text("目标地址").frame(maxWidth: .infinity, alignment: .leading)
+                            Text("协议").frame(width: 52, alignment: .leading)
+                            Text("命中规则").frame(width: 120, alignment: .leading)
+                            Text("代理链").frame(width: 170, alignment: .leading)
+                            Text("上传 / 下载").frame(width: 120, alignment: .trailing)
                         }
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
@@ -346,7 +346,7 @@ struct AuditMonitorView: View {
     }
 
     private var systemExtensionCard: some View {
-        GroupBox("Capture Mode & Phase 3 System Extension Readiness") {
+        GroupBox("流量接管模式与 Phase 3 系统扩展就绪状态") {
             HStack(alignment: .top, spacing: 14) {
                 Image(systemName: "cpu")
                     .font(.title2)
@@ -357,7 +357,7 @@ struct AuditMonitorView: View {
                     HStack(spacing: 8) {
                         Text(appState.config.captureMode.displayName)
                             .font(.subheadline.weight(.semibold))
-                        Text("NETransparentProxyProvider Ready")
+                        Text("已预留 NETransparentProxyProvider 架构")
                             .font(.caption2.weight(.semibold))
                             .padding(.horizontal, 7)
                             .padding(.vertical, 2)
@@ -369,7 +369,7 @@ struct AuditMonitorView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
-                    Text("Phase 3 uses macOS NETransparentProxyProvider (L4 per-process flow interception via audit_token_t—NOT a TUN interface) so it coexists cleanly with corporate VPN utun interfaces. Requires Developer ID signing with the Network Extension entitlement; see Docs/system-extension-design.md.")
+                    Text("Phase 3 基于 macOS NETransparentProxyProvider（按进程 audit_token_t 实现 L4 流级透明拦截，非 TUN 模式），可与公司 VPN（utun）无冲突共存。启用需具备带 Network Extension 权限的 Apple Developer ID 签名证书，详见 Docs/system-extension-design.md。")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }

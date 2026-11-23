@@ -479,6 +479,35 @@ final class CoreEngineTests: XCTestCase {
         try await client.selectProxy(group: "OUTLET", nodeName: "SG-Backup")
         try await client.reloadConfig(path: "/var/empty/mock-mihomo.yaml", force: true)
     }
+
+    // MARK: - Simplified Chinese Localization & Codable Compatibility
+
+    func testChineseLocalizationAndCodableRawValuesUnchanged() {
+        XCTAssertEqual(HealthState.protected.rawValue, "protected")
+        XCTAssertEqual(HealthState.protected.displayName, "已受保护")
+        XCTAssertEqual(HealthState.leaking.displayName, "发现漏网")
+        XCTAssertEqual(SocketClassification.proxied.displayName, "已走代理")
+        XCTAssertEqual(SocketClassification.leak.displayName, "疑似漏网")
+        XCTAssertEqual(ProxyEnvStatus.missing.displayName, "缺少代理环境变量")
+        XCTAssertEqual(CaptureMode.userSpace.rawValue, "userSpace")
+        XCTAssertEqual(CaptureMode.userSpace.displayName, "用户态托管模式（阶段 1–2）")
+        XCTAssertEqual(TargetKind.guiApp.rawValue, "guiApp")
+        XCTAssertEqual(TargetKind.guiApp.displayName, "桌面应用")
+        XCTAssertEqual(MihomoProcessState.running.displayName, "运行中")
+
+        XCTAssertTrue(
+            ClashProfileParserError.missingProxiesSection.localizedDescription.contains("未找到代理节点")
+        )
+        XCTAssertTrue(
+            ConfigStoreError.unsupportedSchemaVersion(99).localizedDescription.contains("不支持的 PinGate 配置版本")
+        )
+        XCTAssertTrue(
+            MihomoConfigRendererError.emptyProxyList.localizedDescription.contains("代理节点列表为空")
+        )
+        XCTAssertTrue(
+            MihomoProcessError.processExitedEarly(1).localizedDescription.contains("意外退出")
+        )
+    }
 }
 
 private final class MockURLProtocol: URLProtocol, @unchecked Sendable {

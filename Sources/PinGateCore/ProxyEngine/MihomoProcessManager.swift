@@ -7,6 +7,21 @@ public enum MihomoProcessState: String, Sendable, Equatable {
     case running
     case restarting
     case failed
+
+    public var displayName: String {
+        switch self {
+        case .stopped:
+            return "已停止"
+        case .starting:
+            return "启动中"
+        case .running:
+            return "运行中"
+        case .restarting:
+            return "重启中"
+        case .failed:
+            return "启动失败"
+        }
+    }
 }
 
 public enum MihomoProcessError: Error, LocalizedError, Sendable {
@@ -16,9 +31,9 @@ public enum MihomoProcessError: Error, LocalizedError, Sendable {
     public var errorDescription: String? {
         switch self {
         case .startupFailed(let message):
-            return "Failed to start Mihomo: \(message)"
+            return "启动 mihomo 失败：\(message)"
         case .processExitedEarly(let code):
-            return "Mihomo exited unexpectedly during startup (code \(code))."
+            return "mihomo 在启动阶段意外退出（退出码 \(code)）。"
         }
     }
 }
@@ -243,7 +258,7 @@ public actor MihomoProcessManager {
 
         guard ready else {
             await stop(outletID: outletID)
-            throw MihomoProcessError.startupFailed("Controller at \(outlet.controllerAddress) did not become reachable in time.")
+            throw MihomoProcessError.startupFailed("控制器 \(outlet.controllerAddress) 在超时时间内未能就绪。")
         }
 
         if var inst = instances[outletID] {

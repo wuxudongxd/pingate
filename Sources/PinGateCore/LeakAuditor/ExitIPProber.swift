@@ -7,9 +7,9 @@ public enum ExitProbeError: Error, LocalizedError, Sendable {
     public var errorDescription: String? {
         switch self {
         case .allProbesFailed(let errors):
-            return "All exit IP probes failed: \(errors.joined(separator: "; "))"
+            return "所有出口 IP 探针均失败：\(errors.joined(separator: "；"))"
         case .invalidProxyConfiguration(let detail):
-            return "Invalid proxy configuration: \(detail)"
+            return "代理配置无效：\(detail)"
         }
     }
 }
@@ -130,7 +130,7 @@ public struct ExitIPProber: Sendable {
             throw NSError(
                 domain: "PinGate.ExitIPProber",
                 code: statusCode,
-                userInfo: [NSLocalizedDescriptionKey: "HTTP status \(statusCode)"]
+                userInfo: [NSLocalizedDescriptionKey: "HTTP 状态码 \(statusCode)"]
             )
         }
 
@@ -138,7 +138,7 @@ public struct ExitIPProber: Sendable {
             throw NSError(
                 domain: "PinGate.ExitIPProber",
                 code: -2,
-                userInfo: [NSLocalizedDescriptionKey: "Unparseable response payload"]
+                userInfo: [NSLocalizedDescriptionKey: "无法解析探针响应内容"]
             )
         }
         return parsed
@@ -206,7 +206,7 @@ public struct ExitIPProber: Sendable {
             country: fields["loc"],
             region: nil,
             city: nil,
-            org: fields["colo"].map { "Cloudflare colo \($0)" },
+            org: fields["colo"].map { "Cloudflare 节点 \($0)" },
             provider: ProbeProvider.cloudflare.rawValue,
             latencyMs: latencyMs,
             probedAt: probedAt

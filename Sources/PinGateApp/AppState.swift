@@ -22,10 +22,12 @@ final class AppState {
     var config: PinGateConfig
     var auditSnapshot: AuditSnapshot?
     var outletRunning: Bool = false
+    var isTogglingOutlet: Bool = false
     var mihomoVersion: String?
     var exitProbe: ExitProbeResult?
     var isProbingExitIP: Bool = false
     var isSyncing: Bool = false
+    var isTestingAllLatencies: Bool = false
     var lastSyncResult: NodeSyncResult?
     var lastSyncError: String?
     var statusBannerMessage: String?
@@ -35,17 +37,22 @@ final class AppState {
     var mihomoGroupNodes: [String] = []
     var nodeLatenciesMs: [String: Int] = [:]
     var testingLatencyNodes: Set<String> = []
+    var busyTargetIDs: Set<UUID> = []
     var activeConnections: [MihomoActiveConnection] = []
 
     var cliShimStatuses: [UUID: Bool] = [:]
     var t3SyncStatuses: [UUID: Bool] = [:]
     var discoveredFlClashProfiles: [URL] = []
     var launchAtLogin: Bool = false
-    var captureModeStatusMessage: String = "用户态托管模式运行中（NSWorkspace 启动注入 + CLI Shim + T3 Code 同步 + libproc 防漏审计）。"
+    var captureModeStatusMessage: String = "用户态托管模式运行中（应用启动注入 + CLI 包装 + T3 Code 同步 + 实时防漏审计）。"
+
+    /// Requested dashboard tab navigation (e.g. from MenuBar leak alert "查看审计").
+    var requestedDashboardSection: DashboardSection?
 
     // MARK: - Internal Lifecycle
     private var hasBootstrapped = false
     private var pollTask: Task<Void, Never>?
+    private var bannerDismissTask: Task<Void, Never>?
     private var profileWatchers: [UUID: ProfileWatcher] = [:]
     private var previousHealthState: HealthState = .stopped
     private var isBundledApp: Bool {
@@ -85,7 +92,23 @@ final class AppState {
         return ConfigStore()
     }
 
-    // MARK: - Chinese Date & Time Formatters
+    // MARK: - Chinese Display & Time Formatters
+
+    static func displayOutletName(_ rawName: String) -> String {
+        let trimmed = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed == "Primary Outlet" {
+            return "主出口"
+        }
+        return trimmed
+    }
+
+    static func shortenedPath(_ path: String) -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        if path.hasPrefix(home) {
+            return "~" + path.dropFirst(home.count)
+        }
+        return path
+    }
 
     static func relativeTimeString(from date: Date, now: Date = Date()) -> String {
         let seconds = max(0, Int(now.timeIntervalSince(date)))
@@ -109,6 +132,25 @@ final class AppState {
         return formatter.string(from: date)
     }
 
+    // MARK: - Banner & Error Feedback
+
+    func showStatusBanner(_ message: String, autoDismiss: Bool = true) {
+        bannerDismissTask?.cancel()
+        statusBannerMessage = message
+        guard autoDismiss else { return }
+        bannerDismissTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3.5))
+            guard !Task.isCancelled, let self else { return }
+            if self.statusBannerMessage == message {
+                self.statusBannerMessage = nil
+            }
+        }
+    }
+
+    func dismissError() {
+        lastSyncError = nil
+    }
+
     // MARK: - Computed Status Helpers
 
     var overallHealthState: HealthState {
@@ -116,6 +158,19 @@ final class AppState {
             return snapshot.overallState
         }
         return outletRunning ? .protected : .stopped
+    }
+
+    var shortProtectionStateLabel: String {
+        switch overallHealthState {
+        case .protected:
+            return "保护中"
+        case .warning:
+            return "有提醒"
+        case .leaking:
+            return "有漏网"
+        case .stopped:
+            return "已暂停"
+        }
     }
 
     var menuBarSymbolName: String {
@@ -142,6 +197,18 @@ final class AppState {
         case .stopped:
             return .secondary
         }
+    }
+
+    var activeProtectedProcessCount: Int {
+        auditSnapshot?.processes.count ?? 0
+    }
+
+    var hasActiveProtectedTraffic: Bool {
+        activeProtectedProcessCount > 0 || (auditSnapshot?.totalProxiedSockets ?? 0) > 0
+    }
+
+    var enabledTargets: [ManagedTarget] {
+        config.targets.filter(\.enabled)
     }
 
     var quickSelectableNodes: [String] {
@@ -222,49 +289,58 @@ final class AppState {
     // MARK: - Outlet Lifecycle & Sync
 
     func startOutlet(_ outlet: OutletConfig? = nil) async {
+        guard !isTogglingOutlet else { return }
         guard let targetOutlet = outlet ?? config.primaryOutlet() else {
             lastSyncError = "尚未配置任何出口通道。"
             return
         }
+        isTogglingOutlet = true
+        defer { isTogglingOutlet = false }
         lastSyncError = nil
-        statusBannerMessage = "正在启动 \(targetOutlet.name)…"
+        showStatusBanner("正在开启固定出口保护…", autoDismiss: false)
         do {
             try await mihomoManager.start(outlet: targetOutlet, bypassRules: config.bypassRules)
             await refreshOutletRuntimeStatus(for: targetOutlet)
-            statusBannerMessage = "\(targetOutlet.name) 已监听 :\(String(targetOutlet.listenPort))"
+            showStatusBanner("固定出口保护已开启（:\(String(targetOutlet.listenPort))）")
             await probeExitIP(outlet: targetOutlet)
             await refreshAudit()
             await refreshActiveConnections()
         } catch {
             lastSyncError = error.localizedDescription
-            statusBannerMessage = "启动失败"
+            statusBannerMessage = nil
         }
     }
 
     func stopOutlet(_ outlet: OutletConfig? = nil) async {
+        guard !isTogglingOutlet else { return }
         guard let targetOutlet = outlet ?? config.primaryOutlet() else { return }
-        statusBannerMessage = "正在停止 \(targetOutlet.name)…"
+        isTogglingOutlet = true
+        defer { isTogglingOutlet = false }
+        showStatusBanner("正在暂停固定出口保护…", autoDismiss: false)
         await mihomoManager.stop(outletID: targetOutlet.id)
         await refreshOutletRuntimeStatus(for: targetOutlet)
         activeConnections = []
-        statusBannerMessage = "\(targetOutlet.name) 已停止"
+        showStatusBanner("固定出口保护已暂停")
         await refreshAudit()
     }
 
     func restartOutlet(_ outlet: OutletConfig? = nil) async {
+        guard !isTogglingOutlet else { return }
         guard let targetOutlet = outlet ?? config.primaryOutlet() else { return }
+        isTogglingOutlet = true
+        defer { isTogglingOutlet = false }
         lastSyncError = nil
-        statusBannerMessage = "正在重启 \(targetOutlet.name)…"
+        showStatusBanner("正在重启固定出口通道…", autoDismiss: false)
         do {
             try await mihomoManager.restart(outlet: targetOutlet, bypassRules: config.bypassRules)
             await refreshOutletRuntimeStatus(for: targetOutlet)
-            statusBannerMessage = "\(targetOutlet.name) 已重启"
+            showStatusBanner("固定出口通道已重启")
             await probeExitIP(outlet: targetOutlet)
             await refreshAudit()
             await refreshActiveConnections()
         } catch {
             lastSyncError = error.localizedDescription
-            statusBannerMessage = "重启失败"
+            statusBannerMessage = nil
         }
     }
 
@@ -273,7 +349,7 @@ final class AppState {
         guard !isSyncing else { return }
         isSyncing = true
         lastSyncError = nil
-        statusBannerMessage = "正在同步 \(targetOutlet.name)…"
+        showStatusBanner("正在同步订阅节点…", autoDismiss: false)
         defer { isSyncing = false }
 
         do {
@@ -283,16 +359,18 @@ final class AppState {
                 hotReloadIfRunning: true
             )
             lastSyncResult = result
-            statusBannerMessage = result.reloadedLive
-                ? "已同步并热重载（\(result.extractedProxyNames.count) 个节点）"
-                : "已生成 0600 权限配置（\(result.extractedProxyNames.count) 个节点）"
+            showStatusBanner(
+                result.reloadedLive
+                    ? "已同步并热重载（\(result.extractedProxyNames.count) 个节点）"
+                    : "已同步配置（\(result.extractedProxyNames.count) 个节点）"
+            )
             await refreshOutletRuntimeStatus(for: targetOutlet)
             if outletRunning {
                 await probeExitIP(outlet: targetOutlet)
             }
         } catch {
             lastSyncError = error.localizedDescription
-            statusBannerMessage = "同步失败"
+            statusBannerMessage = nil
         }
     }
 
@@ -302,7 +380,7 @@ final class AppState {
         do {
             try await client.selectProxy(nodeName: nodeName)
             activeMihomoNode = nodeName
-            statusBannerMessage = "已切换出口节点至 \(nodeName)"
+            showStatusBanner("已切换出口节点至 \(nodeName)")
             await probeExitIP(outlet: targetOutlet)
         } catch {
             lastSyncError = error.localizedDescription
@@ -310,7 +388,7 @@ final class AppState {
     }
 
     func testLatency(nodeName: String, outlet: OutletConfig) async {
-        guard !nodeName.isEmpty else { return }
+        guard !nodeName.isEmpty, !testingLatencyNodes.contains(nodeName) else { return }
         testingLatencyNodes.insert(nodeName)
         defer { testingLatencyNodes.remove(nodeName) }
         let client = mihomoManager.apiClient(for: outlet)
@@ -323,6 +401,9 @@ final class AppState {
     }
 
     func testAllLatencies(outlet: OutletConfig) async {
+        guard !isTestingAllLatencies else { return }
+        isTestingAllLatencies = true
+        defer { isTestingAllLatencies = false }
         let nodes = [outlet.primaryNodeName] + outlet.fallbackNodeNames
         for node in nodes where !node.isEmpty {
             await testLatency(nodeName: node, outlet: outlet)
@@ -340,7 +421,7 @@ final class AppState {
             let result = try await exitProber.probe(outlet: targetOutlet)
             exitProbe = result
         } catch {
-            statusBannerMessage = "出口 IP 探测失败：\(error.localizedDescription)"
+            showStatusBanner("出口 IP 探测失败：\(error.localizedDescription)")
         }
     }
 
@@ -434,7 +515,7 @@ final class AppState {
             discoveredFlClashProfiles = ConfigStore.discoverFlClashProfiles()
             configureProfileWatchers()
             refreshTargetStatuses()
-            statusBannerMessage = "配置已保存（0600 权限）"
+            showStatusBanner("配置已安全保存")
 
             let snapshotURL = configStore.runtimeDirectory.appendingPathComponent("extension-policy.json")
             let extSnapshot = interceptor.exportExtensionSnapshot(config: newConfig)
@@ -445,7 +526,6 @@ final class AppState {
             }
         } catch {
             lastSyncError = error.localizedDescription
-            statusBannerMessage = "保存配置失败"
         }
     }
 
@@ -479,7 +559,10 @@ final class AppState {
     // MARK: - Target Operations
 
     func launchOrActivate(target: ManagedTarget) async {
+        guard !busyTargetIDs.contains(target.id) else { return }
         guard let outlet = config.outlet(id: target.outletID) ?? config.primaryOutlet() else { return }
+        busyTargetIDs.insert(target.id)
+        defer { busyTargetIDs.remove(target.id) }
         do {
             let outcome = try await interceptor.launchTarget(
                 target,
@@ -496,8 +579,11 @@ final class AppState {
     }
 
     func restartTargetWithProxy(target: ManagedTarget) async {
+        guard !busyTargetIDs.contains(target.id) else { return }
         guard let outlet = config.outlet(id: target.outletID) ?? config.primaryOutlet() else { return }
-        statusBannerMessage = "正在通过出口 :\(String(outlet.listenPort)) 重启 \(target.name)…"
+        busyTargetIDs.insert(target.id)
+        defer { busyTargetIDs.remove(target.id) }
+        showStatusBanner("正在通过出口 :\(String(outlet.listenPort)) 重启 \(target.name)…", autoDismiss: false)
         do {
             let outcome = try await interceptor.launchTarget(
                 target,
@@ -516,27 +602,30 @@ final class AppState {
     private func handleLaunchOutcome(_ outcome: AppLaunchOutcome) {
         switch outcome {
         case .launched(_, let name, let port):
-            statusBannerMessage = "已启动 \(name)，固定至出口 :\(String(port))"
+            showStatusBanner("已启动 \(name)，固定至出口 :\(String(port))")
         case .activatedExisting(_, let name):
-            statusBannerMessage = "已激活受保护的 \(name)"
+            showStatusBanner("已激活受保护的 \(name)")
         case .runningWithoutProxy(_, let name, let port):
-            statusBannerMessage = "\(name) 未走出口 :\(String(port)) — 请点击「用代理重启」"
+            showStatusBanner("\(name) 未走出口 :\(String(port))，请点击「用代理重启」")
         case .restartedWithProxy(_, _, let name, let port):
-            statusBannerMessage = "已通过出口 :\(String(port)) 重启 \(name)"
+            showStatusBanner("已通过出口 :\(String(port)) 重启 \(name)")
         case .blockedPortClosed(let host, let port, let name):
-            lastSyncError = "Fail-Closed 拦截：本地出口 \(host):\(String(port)) 未监听，已阻止启动 \(name)。"
+            lastSyncError = "本地出口 \(host):\(String(port)) 未运行，已阻止启动 \(name) 以防直连漏网。"
         }
     }
 
     func installCLIShim(for target: ManagedTarget) async {
+        guard !busyTargetIDs.contains(target.id) else { return }
         guard let outlet = config.outlet(id: target.outletID) ?? config.primaryOutlet() else { return }
+        busyTargetIDs.insert(target.id)
+        defer { busyTargetIDs.remove(target.id) }
         do {
             let url = try interceptor.shimManager.installShim(
                 target: target,
                 outlet: outlet,
                 bypassRules: config.bypassRules
             )
-            statusBannerMessage = "已安装 CLI Shim：\(url.path)"
+            showStatusBanner("已安装 CLI 包装：\(Self.shortenedPath(url.path))")
             refreshTargetStatuses()
         } catch {
             lastSyncError = error.localizedDescription
@@ -544,10 +633,13 @@ final class AppState {
     }
 
     func removeCLIShim(for target: ManagedTarget) async {
+        guard !busyTargetIDs.contains(target.id) else { return }
         guard let cmd = target.cliCommandName else { return }
+        busyTargetIDs.insert(target.id)
+        defer { busyTargetIDs.remove(target.id) }
         do {
             _ = try interceptor.shimManager.removeShim(commandName: cmd)
-            statusBannerMessage = "已移除 CLI Shim：\(cmd)"
+            showStatusBanner("已移除 CLI 包装：\(cmd)")
             refreshTargetStatuses()
         } catch {
             lastSyncError = error.localizedDescription
@@ -555,16 +647,21 @@ final class AppState {
     }
 
     func syncT3Code(for target: ManagedTarget) async {
+        guard !busyTargetIDs.contains(target.id) else { return }
         guard let outlet = config.outlet(id: target.outletID) ?? config.primaryOutlet() else { return }
+        busyTargetIDs.insert(target.id)
+        defer { busyTargetIDs.remove(target.id) }
         do {
             let result = try interceptor.t3Adapter.sync(
                 target: target,
                 outlet: outlet,
                 bypassRules: config.bypassRules
             )
-            statusBannerMessage = result.changed
-                ? "已同步 T3 Code（\(result.providerKey)）并自动备份"
-                : "T3 Code（\(result.providerKey)）已是最新状态"
+            showStatusBanner(
+                result.changed
+                    ? "已同步 T3 Code（\(result.providerKey)）并自动备份"
+                    : "T3 Code（\(result.providerKey)）已是最新状态"
+            )
             refreshTargetStatuses()
         } catch {
             lastSyncError = error.localizedDescription
@@ -587,9 +684,9 @@ final class AppState {
         }
         if addedCount > 0 {
             await saveConfig(cfg, triggerSync: false)
-            statusBannerMessage = "已应用模板「\(template.name)」（新增 \(addedCount) 项）"
+            showStatusBanner("已添加模板「\(template.name)」（新增 \(addedCount) 项）")
         } else {
-            statusBannerMessage = "模板「\(template.name)」中的所有目标已存在"
+            showStatusBanner("模板「\(template.name)」中的所有目标已存在")
         }
     }
 
@@ -640,7 +737,7 @@ final class AppState {
     func setLaunchAtLogin(_ enabled: Bool) {
         guard isBundledApp else {
             launchAtLogin = false
-            statusBannerMessage = "开机自启需要从 PinGate.app 应用程序包运行"
+            showStatusBanner("开机自启需要从 PinGate.app 应用程序包运行")
             return
         }
         do {
@@ -680,6 +777,8 @@ final class AppState {
     func quitApp() {
         pollTask?.cancel()
         pollTask = nil
+        bannerDismissTask?.cancel()
+        bannerDismissTask = nil
         for watcher in profileWatchers.values {
             watcher.stop()
         }
@@ -687,6 +786,120 @@ final class AppState {
         Task {
             await mihomoManager.stopAll()
             NSApp.terminate(nil)
+        }
+    }
+}
+
+// MARK: - Shared UI Components
+
+/// Displays a real macOS application bundle icon when available, falling back to an SF Symbol.
+struct TargetIconView: View {
+    let target: ManagedTarget
+    var size: CGFloat = 24
+    var tintColor: Color = .secondary
+
+    var body: some View {
+        if target.kind == .guiApp, let appIcon = resolvedAppIcon() {
+            Image(nsImage: appIcon)
+                .resizable()
+                .interpolation(.high)
+                .aspectRatio(contentMode: .fit)
+                .frame(width: size, height: size)
+        } else {
+            ZStack {
+                RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
+                    .fill(tintColor.opacity(0.14))
+                    .frame(width: size, height: size)
+                Image(systemName: fallbackSymbol)
+                    .font(.system(size: size * 0.5, weight: .medium))
+                    .foregroundStyle(tintColor)
+            }
+        }
+    }
+
+    private var fallbackSymbol: String {
+        switch target.kind {
+        case .guiApp: return "app.fill"
+        case .cliTool: return "terminal.fill"
+        case .t3Integration: return "link"
+        }
+    }
+
+    private func resolvedAppIcon() -> NSImage? {
+        guard let rawPath = target.appPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawPath.isEmpty
+        else { return nil }
+        let expanded = NSString(string: rawPath).expandingTildeInPath
+        guard FileManager.default.fileExists(atPath: expanded) else { return nil }
+        return NSWorkspace.shared.icon(forFile: expanded)
+    }
+}
+
+/// Restrained macOS-native status indicator: solid 6pt dot + high-contrast label.
+struct StatusDotLabel: View {
+    let text: String
+    let color: Color
+    var emphasized: Bool = false
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(color)
+                .frame(width: 6, height: 6)
+            Text(text)
+                .font(.caption)
+                .fontWeight(emphasized ? .semibold : .regular)
+                .foregroundStyle(emphasized ? color : .secondary)
+        }
+    }
+}
+
+/// Unified protection master switch with confirmation guard when pausing active traffic.
+struct ProtectionMasterSwitch: View {
+    @Bindable var appState: AppState
+    @State private var showPauseConfirm = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if appState.isTogglingOutlet {
+                ProgressView()
+                    .controlSize(.small)
+            }
+            Toggle(
+                "固定出口保护总开关",
+                isOn: Binding(
+                    get: { appState.outletRunning },
+                    set: { wantOn in
+                        if wantOn {
+                            Task { await appState.startOutlet() }
+                        } else if appState.hasActiveProtectedTraffic {
+                            showPauseConfirm = true
+                        } else {
+                            Task { await appState.stopOutlet() }
+                        }
+                    }
+                )
+            )
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .tint(.green)
+            .controlSize(.small)
+            .disabled(appState.isTogglingOutlet)
+            .help(appState.outletRunning ? "暂停固定出口保护" : "开启固定出口保护")
+        }
+        .confirmationDialog(
+            "确定要暂停固定出口保护吗？",
+            isPresented: $showPauseConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("仍要暂停", role: .destructive) {
+                Task { await appState.stopOutlet() }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            let procs = appState.activeProtectedProcessCount
+            let socks = appState.auditSnapshot?.totalProxiedSockets ?? 0
+            Text("当前有 \(String(procs)) 个受保护进程（\(String(socks)) 条代理连接）正在使用固定出口，暂停后将立即中断其代理连接。")
         }
     }
 }

@@ -48,12 +48,12 @@ struct PinGateApp: App {
 
         Window("PinGate 控制台", id: "dashboard") {
             DashboardView(appState: appState)
-                .frame(minWidth: 920, minHeight: 620)
+                .frame(minWidth: 900, minHeight: 600)
                 .task {
                     await appState.bootstrapIfNeeded()
                 }
         }
-        .defaultSize(width: 1020, height: 680)
+        .defaultSize(width: 980, height: 660)
         .windowResizability(.contentMinSize)
         .defaultLaunchBehavior(
             CommandLine.arguments.contains("--open-dashboard") ? .presented : .suppressed
@@ -86,14 +86,14 @@ struct PinGateApp: App {
         if let outputPath = dashboardPath {
             let hosting = NSHostingController(rootView: DashboardView(appState: appState))
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 1060, height: 700),
+                contentRect: NSRect(x: 0, y: 0, width: 980, height: 660),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable],
                 backing: .buffered,
                 defer: false
             )
             window.title = "PinGate 控制台"
             window.contentViewController = hosting
-            window.setContentSize(NSSize(width: 1060, height: 700))
+            window.setContentSize(NSSize(width: 980, height: 660))
             window.center()
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -108,8 +108,8 @@ struct PinGateApp: App {
                 .background(Color(nsColor: .windowBackgroundColor))
             let hosting = NSHostingController(rootView: popoverRoot)
             let fitting = hosting.view.fittingSize
-            let width = max(370, fitting.width)
-            let height = max(420, fitting.height)
+            let width = max(340, fitting.width)
+            let height = max(360, fitting.height)
 
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: width, height: height),
@@ -147,36 +147,23 @@ struct PinGateApp: App {
 }
 
 enum DashboardSection: String, CaseIterable, Identifiable {
-    case outlets = "出口通道"
-    case targets = "纳管目标"
-    case bypass = "直连白名单"
     case audit = "防漏审计"
+    case targets = "纳管目标"
+    case outlets = "出口通道"
+    case bypass = "直连白名单"
 
     var id: String { rawValue }
 
     var systemImage: String {
         switch self {
-        case .outlets:
-            return "network"
-        case .targets:
-            return "app.badge.checkmark"
-        case .bypass:
-            return "arrow.triangle.branch"
         case .audit:
             return "shield.lefthalf.filled"
-        }
-    }
-
-    var subtitle: String {
-        switch self {
-        case .outlets:
-            return "代理源、节点与延迟测试"
         case .targets:
-            return "应用、CLI Shim 与 T3 Code"
+            return "app.badge.checkmark"
+        case .outlets:
+            return "network"
         case .bypass:
-            return "公司内网域名与私有 CIDR"
-        case .audit:
-            return "实时 Socket 审计与活跃连接"
+            return "arrow.triangle.branch"
         }
     }
 }
@@ -189,98 +176,167 @@ struct DashboardView: View {
         NavigationSplitView {
             sidebar
         } detail: {
-            detailContent
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(nsColor: .windowBackgroundColor))
+            VStack(spacing: 0) {
+                feedbackBanners
+                detailContent
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .background(Color(nsColor: .windowBackgroundColor))
         }
         .navigationSplitViewStyle(.balanced)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
-                if let banner = appState.statusBannerMessage {
-                    Text(banner)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .padding(.horizontal, 8)
-                }
-
                 Button {
                     Task { await appState.syncNow() }
                 } label: {
-                    Label(appState.isSyncing ? "同步中…" : "立即同步", systemImage: "arrow.triangle.2.circlepath")
+                    HStack(spacing: 5) {
+                        if appState.isSyncing {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                        }
+                        Text(appState.isSyncing ? "同步中…" : "同步配置")
+                    }
                 }
+                .help("从订阅源同步节点并热重载")
                 .disabled(appState.isSyncing)
 
                 Button {
-                    Task {
-                        await appState.refreshAudit()
-                        await appState.refreshActiveConnections()
-                    }
+                    Task { await refreshCurrentSection() }
                 } label: {
                     Label("刷新", systemImage: "arrow.clockwise")
                 }
+                .help("刷新当前状态 (⌘R)")
+                .keyboardShortcut("r", modifiers: .command)
             }
         }
-        .onAppear {
-            if let requestedTab = CommandLine.arguments.firstIndex(of: "--tab"),
-               CommandLine.arguments.indices.contains(requestedTab + 1)
-            {
-                switch CommandLine.arguments[requestedTab + 1].lowercased() {
-                case "outlets": selection = .outlets
-                case "targets": selection = .targets
-                case "bypass": selection = .bypass
-                case "audit": selection = .audit
-                default: break
-                }
+        .background {
+            // Keyboard shortcuts ⌘1–⌘4 for instant tab switching.
+            Group {
+                Button("") { selection = .audit }.keyboardShortcut("1", modifiers: .command)
+                Button("") { selection = .targets }.keyboardShortcut("2", modifiers: .command)
+                Button("") { selection = .outlets }.keyboardShortcut("3", modifiers: .command)
+                Button("") { selection = .bypass }.keyboardShortcut("4", modifiers: .command)
             }
+            .frame(width: 0, height: 0)
+            .opacity(0)
+            .accessibilityHidden(true)
+        }
+        .onAppear {
+            applyRequestedTabFromLaunchArgs()
+            if let requested = appState.requestedDashboardSection {
+                selection = requested
+                appState.requestedDashboardSection = nil
+            }
+        }
+        .onChange(of: appState.requestedDashboardSection) { _, newSection in
+            if let newSection {
+                selection = newSection
+                appState.requestedDashboardSection = nil
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var feedbackBanners: some View {
+        if let error = appState.lastSyncError {
+            HStack(spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                Spacer()
+                Button("关闭") {
+                    appState.dismissError()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(Color.orange.opacity(0.14))
+            Divider()
+        } else if let banner = appState.statusBannerMessage {
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+                Text(banner)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 6)
+            .background(Color(nsColor: .controlBackgroundColor).opacity(0.85))
+            Divider()
         }
     }
 
     private var sidebar: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 10) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(appState.healthColor.opacity(0.16))
-                            .frame(width: 38, height: 38)
-                        Image(systemName: appState.menuBarSymbolName)
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(appState.healthColor)
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
+            // Unified compact master control card
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: appState.menuBarSymbolName)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(appState.healthColor)
+
+                    VStack(alignment: .leading, spacing: 1) {
                         Text("PinGate")
                             .font(.headline)
-                        Text(appState.overallHealthState.displayName)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(appState.healthColor)
+                        StatusDotLabel(
+                            text: appState.shortProtectionStateLabel,
+                            color: appState.healthColor,
+                            emphasized: appState.overallHealthState == .leaking
+                        )
                     }
+
                     Spacer()
+
+                    ProtectionMasterSwitch(appState: appState)
                 }
 
                 HStack(spacing: 6) {
-                    Circle()
-                        .fill(appState.outletRunning ? Color.green : Color.secondary)
-                        .frame(width: 7, height: 7)
-                    if let outlet = appState.config.primaryOutlet() {
+                    if let probe = appState.exitProbe, appState.outletRunning {
+                        Text(probe.country.map { "\($0) · \(probe.ip)" } ?? probe.ip)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    } else if let outlet = appState.config.primaryOutlet() {
                         Text("\(outlet.listenHost):\(String(outlet.listenPort))")
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
                     } else {
-                        Text("未配置出口")
+                        Text("尚未配置出口")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+
                     Spacer()
-                    let leaks = appState.auditSnapshot?.totalLeakSockets ?? 0
-                    Text(leaks == 0 ? "0 漏网" : "\(String(leaks)) 处漏网")
-                        .font(.caption2.weight(.semibold))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(
-                            Capsule().fill((leaks == 0 ? Color.green : Color.red).opacity(0.16))
-                        )
-                        .foregroundStyle(leaks == 0 ? Color.green : Color.red)
+
+                    if appState.outletRunning {
+                        Button {
+                            Task { await appState.probeExitIP() }
+                        } label: {
+                            if appState.isProbingExitIP {
+                                ProgressView()
+                                    .controlSize(.mini)
+                            } else {
+                                Image(systemName: "globe")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .help("重新探测出口 IP")
+                        .disabled(appState.isProbingExitIP)
+                    }
                 }
             }
             .padding(14)
@@ -289,18 +345,8 @@ struct DashboardView: View {
 
             List(DashboardSection.allCases, selection: $selection) { section in
                 NavigationLink(value: section) {
-                    HStack(spacing: 10) {
-                        Image(systemName: section.systemImage)
-                            .frame(width: 20)
-                            .foregroundStyle(selection == section ? Color.accentColor : .secondary)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(section.rawValue)
-                                .font(.body.weight(.medium))
-                            Text(section.subtitle)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
+                    HStack {
+                        Label(section.rawValue, systemImage: section.systemImage)
                         Spacer()
                         if section == .audit, let leaks = appState.auditSnapshot?.totalLeakSockets, leaks > 0 {
                             Text(String(leaks))
@@ -311,76 +357,56 @@ struct DashboardView: View {
                                 .foregroundStyle(.white)
                         }
                     }
-                    .padding(.vertical, 3)
                 }
             }
             .listStyle(.sidebar)
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 8) {
-                if let probe = appState.exitProbe {
-                    HStack(spacing: 6) {
-                        Image(systemName: "globe")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text(probe.country.map { "\($0) • \(probe.ip)" } ?? probe.ip)
-                            .font(.caption.monospaced())
-                            .lineLimit(1)
-                        Spacer()
-                        Text("\(String(probe.latencyMs))ms")
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(.secondary)
-                    }
-                } else {
-                    HStack(spacing: 6) {
-                        Image(systemName: "globe")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text(appState.isProbingExitIP ? "正在探测出口 IP…" : "尚未探测出口 IP")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                    }
-                }
-
-                HStack(spacing: 8) {
-                    Button(appState.outletRunning ? "停止出口" : "启动出口") {
-                        Task {
-                            if appState.outletRunning {
-                                await appState.stopOutlet()
-                            } else {
-                                await appState.startOutlet()
-                            }
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-
-                    Button("探测 IP") {
-                        Task { await appState.probeExitIP() }
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(!appState.outletRunning || appState.isProbingExitIP)
-                }
-            }
-            .padding(12)
         }
-        .navigationSplitViewColumnWidth(min: 225, ideal: 245, max: 280)
+        .navigationSplitViewColumnWidth(min: 205, ideal: 220, max: 250)
     }
 
     @ViewBuilder
     private var detailContent: some View {
         switch selection {
-        case .outlets:
-            OutletsView(appState: appState)
-        case .targets:
-            TargetsView(appState: appState)
-        case .bypass:
-            BypassRulesView(appState: appState)
         case .audit:
             AuditMonitorView(appState: appState)
+        case .targets:
+            TargetsView(appState: appState)
+        case .outlets:
+            OutletsView(appState: appState)
+        case .bypass:
+            BypassRulesView(appState: appState)
+        }
+    }
+
+    private func refreshCurrentSection() async {
+        switch selection {
+        case .audit:
+            await appState.refreshAudit()
+            await appState.refreshActiveConnections()
+        case .targets:
+            await appState.refreshAudit()
+            appState.refreshTargetStatuses()
+        case .outlets:
+            if let outlet = appState.config.primaryOutlet() {
+                await appState.refreshAvailableNodes(for: outlet)
+                await appState.probeExitIP(outlet: outlet)
+            }
+        case .bypass:
+            await appState.refreshAudit()
+        }
+    }
+
+    private func applyRequestedTabFromLaunchArgs() {
+        if let requestedTab = CommandLine.arguments.firstIndex(of: "--tab"),
+           CommandLine.arguments.indices.contains(requestedTab + 1)
+        {
+            switch CommandLine.arguments[requestedTab + 1].lowercased() {
+            case "outlets": selection = .outlets
+            case "targets": selection = .targets
+            case "bypass": selection = .bypass
+            case "audit": selection = .audit
+            default: break
+            }
         }
     }
 }

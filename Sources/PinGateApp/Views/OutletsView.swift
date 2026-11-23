@@ -29,7 +29,19 @@ struct OutletsView: View {
     @State private var upstreamPassword: String = ""
 
     @State private var newFallbackNode: String = ""
-    @State private var dirty: Bool = false
+    @State private var showAdvancedNetwork: Bool = false
+    @State private var showRestartConfirm: Bool = false
+    @State private var showDeleteConfirm: Bool = false
+
+    private var savedOutlet: OutletConfig? {
+        guard let id = selectedOutletID else { return appState.config.primaryOutlet() }
+        return appState.config.outlet(id: id)
+    }
+
+    private var hasUnsavedChanges: Bool {
+        guard let built = buildDraftWithSource(), let saved = savedOutlet else { return false }
+        return built != saved
+    }
 
     var body: some View {
         ScrollView {
@@ -37,11 +49,13 @@ struct OutletsView: View {
                 headerRow
 
                 if let outlet = draftOutlet {
-                    runtimeCard(for: outlet)
-                    basicSettingsCard(outlet: outlet)
+                    currentOutletAndNodeCard(outlet: outlet)
                     sourceConfigCard
-                    nodeSelectionCard(outlet: outlet)
-                    actionBar
+                    advancedNetworkSection(outlet: outlet)
+
+                    if hasUnsavedChanges {
+                        unsavedChangesBar
+                    }
                 } else {
                     ContentUnavailableView(
                         "尚未配置出口通道",
@@ -61,6 +75,39 @@ struct OutletsView: View {
                 loadInitialSelection()
             }
         }
+        .confirmationDialog(
+            "确定要重启固定出口通道吗？",
+            isPresented: $showRestartConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("重启通道", role: .destructive) {
+                if let outlet = buildDraftWithSource() ?? savedOutlet {
+                    Task { await appState.restartOutlet(outlet) }
+                }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("重启过程会导致正在使用该出口的应用短暂重连（约 1–2 秒）。")
+        }
+        .confirmationDialog(
+            "确定要删除此出口通道吗？",
+            isPresented: $showDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("删除出口", role: .destructive) {
+                if let id = draftOutlet?.id {
+                    deleteOutlet(id: id)
+                }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            let boundCount = draftOutlet.map { appState.config.targets(for: $0.id).count } ?? 0
+            if boundCount > 0 {
+                Text("当前仍有 \(String(boundCount)) 个纳管目标绑定到此出口，删除后需为其重新指定出口。")
+            } else {
+                Text("删除后该出口通道配置将被移除。")
+            }
+        }
     }
 
     private var headerRow: some View {
@@ -68,7 +115,7 @@ struct OutletsView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("出口通道")
                     .font(.title2.bold())
-                Text("配置固定代理出口、订阅自动同步源及主备节点切换。")
+                Text("管理固定代理出口、节点选择与订阅自动同步。")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -86,10 +133,12 @@ struct OutletsView: View {
                     }
                 )) {
                     ForEach(appState.config.outlets) { item in
-                        Text("\(item.name) (:\(String(item.listenPort)))").tag(item.id)
+                        Text("\(AppState.displayOutletName(item.name)) (:\(String(item.listenPort)))")
+                            .tag(item.id)
                     }
                 }
-                .frame(width: 220)
+                .labelsHidden()
+                .frame(width: 180)
             }
 
             Button {
@@ -101,406 +150,498 @@ struct OutletsView: View {
         }
     }
 
-    private func runtimeCard(for outlet: OutletConfig) -> some View {
-        GroupBox {
-            HStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 6) {
+    // MARK: - Layer 1A: Current Outlet Status & Node Selection
+
+    private func currentOutletAndNodeCard(outlet: OutletConfig) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            // Calm status strip (no conflicting start/stop/prominent-restart buttons!)
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
-                        Circle()
-                            .fill(appState.outletRunning ? Color.green : Color.secondary)
-                            .frame(width: 10, height: 10)
-                        Text(appState.outletRunning ? "托管 mihomo 运行中" : "出口已停止")
-                            .font(.headline)
-                        if let version = appState.mihomoVersion {
-                            Text(version)
-                                .font(.caption.monospaced())
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Capsule().fill(Color.secondary.opacity(0.14)))
-                        }
-                    }
-
-                    HStack(spacing: 14) {
-                        Label("\(outlet.listenHost):\(String(outlet.listenPort))", systemImage: "arrow.left.arrow.right")
-                            .font(.caption.monospaced())
-                        Label("控制端口 :\(String(outlet.controllerPort))", systemImage: "slider.horizontal.3")
-                            .font(.caption.monospaced())
+                        StatusDotLabel(
+                            text: appState.outletRunning
+                                ? "运行中\(appState.mihomoVersion.map { " · mihomo \($0)" } ?? "")"
+                                : "已暂停（可在左上角总开关开启）",
+                            color: appState.outletRunning ? .green : .secondary
+                        )
                         if let sync = appState.lastSyncResult {
-                            Label(
-                                "已提取 \(sync.extractedProxyNames.count) 个节点 • \(AppState.relativeTimeString(from: sync.syncedAt))",
-                                systemImage: "checkmark.circle"
-                            )
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            Text("· 已同步 \(AppState.relativeTimeString(from: sync.syncedAt))")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     }
 
-                    if let chain = appState.lastSyncResult?.extractedProxyNames, !chain.isEmpty {
-                        HStack(spacing: 6) {
-                            Text("代理链：")
-                                .font(.caption2.weight(.semibold))
+                    HStack(spacing: 10) {
+                        if let probe = appState.exitProbe, appState.outletRunning {
+                            Text("当前出口：\(probe.country.map { "\($0) · " } ?? "")\(probe.ip)（\(String(probe.latencyMs)) ms）")
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.primary)
+                        } else {
+                            Text("监听端口：\(outlet.listenHost):\(String(outlet.listenPort))")
+                                .font(.caption.monospaced())
                                 .foregroundStyle(.secondary)
-                            ForEach(chain, id: \.self) { name in
-                                Text(name)
-                                    .font(.caption2)
-                                    .padding(.horizontal, 7)
-                                    .padding(.vertical, 2)
-                                    .background(Capsule().fill(Color.accentColor.opacity(0.14)))
-                            }
                         }
                     }
                 }
 
                 Spacer()
 
-                VStack(alignment: .trailing, spacing: 8) {
-                    HStack(spacing: 8) {
-                        Button(appState.outletRunning ? "重启" : "启动") {
-                            Task {
-                                if appState.outletRunning {
-                                    await appState.restartOutlet(outlet)
-                                } else {
-                                    await appState.startOutlet(outlet)
-                                }
+                HStack(spacing: 8) {
+                    Button {
+                        Task { await appState.probeExitIP(outlet: outlet) }
+                    } label: {
+                        if appState.isProbingExitIP {
+                            HStack(spacing: 4) {
+                                ProgressView().controlSize(.mini)
+                                Text("探测中…")
                             }
+                        } else {
+                            Text("探测 IP")
                         }
-                        .buttonStyle(.borderedProminent)
-
-                        if appState.outletRunning {
-                            Button("停止") {
-                                Task { await appState.stopOutlet(outlet) }
-                            }
-                            .buttonStyle(.bordered)
-                        }
-                    }
-
-                    HStack(spacing: 8) {
-                        Button("立即同步") {
-                            Task { await appState.syncNow(outlet: outlet) }
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .disabled(appState.isSyncing)
-
-                        Button("测试延迟") {
-                            Task { await appState.testAllLatencies(outlet: outlet) }
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .disabled(!appState.outletRunning)
-                    }
-                }
-            }
-            .padding(6)
-        }
-    }
-
-    private func basicSettingsCard(outlet: OutletConfig) -> some View {
-        GroupBox("常规与监听配置") {
-            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 10) {
-                GridRow {
-                    Text("出口名称")
-                        .foregroundStyle(.secondary)
-                        .frame(width: 140, alignment: .trailing)
-                    TextField("主出口通道", text: binding(\.name))
-                        .textFieldStyle(.roundedBorder)
-                    Toggle("启用", isOn: binding(\.enabled))
-                }
-
-                GridRow {
-                    Text("监听地址")
-                        .foregroundStyle(.secondary)
-                        .frame(width: 140, alignment: .trailing)
-                    HStack(spacing: 8) {
-                        TextField("127.0.0.1", text: binding(\.listenHost))
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 130)
-                        Text(":")
-                        TextField("17899", value: binding(\.listenPort), format: .number.grouping(.never))
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 85)
-                        Text("控制端口")
-                            .foregroundStyle(.secondary)
-                            .padding(.leading, 8)
-                        TextField("17890", value: binding(\.controllerPort), format: .number.grouping(.never))
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 85)
-                    }
-                    EmptyView()
-                }
-
-                GridRow {
-                    Text("预期地区 / IP")
-                        .foregroundStyle(.secondary)
-                        .frame(width: 140, alignment: .trailing)
-                    HStack(spacing: 8) {
-                        TextField("国家代码（如 US）", text: Binding(
-                            get: { draftOutlet?.expectedCountryCode ?? "" },
-                            set: { val in
-                                draftOutlet?.expectedCountryCode = val.isEmpty ? nil : val.uppercased()
-                                dirty = true
-                            }
-                        ))
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 150)
-
-                        TextField("可选出口 IP 提示", text: Binding(
-                            get: { draftOutlet?.expectedIPHint ?? "" },
-                            set: { val in
-                                draftOutlet?.expectedIPHint = val.isEmpty ? nil : val
-                                dirty = true
-                            }
-                        ))
-                        .textFieldStyle(.roundedBorder)
-                    }
-                    EmptyView()
-                }
-            }
-            .padding(8)
-        }
-    }
-
-    private var sourceConfigCard: some View {
-        GroupBox("代理来源") {
-            VStack(alignment: .leading, spacing: 12) {
-                Picker("来源类型", selection: $sourceKind) {
-                    ForEach(SourceKindTab.allCases) { tab in
-                        Text(tab.rawValue).tag(tab)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .onChange(of: sourceKind) { _, _ in
-                    dirty = true
-                }
-
-                switch sourceKind {
-                case .localProfile:
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            TextField(
-                                "~/Library/Application Support/com.follow.clash/profiles/...",
-                                text: $localProfilePath
-                            )
-                            .textFieldStyle(.roundedBorder)
-                            .onChange(of: localProfilePath) { _, _ in dirty = true }
-
-                            Button("选择…") {
-                                browseForProfileYAML()
-                            }
-                        }
-
-                        if !appState.discoveredFlClashProfiles.isEmpty {
-                            HStack(spacing: 8) {
-                                Text("已发现的 FlClash 配置：")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                ForEach(appState.discoveredFlClashProfiles.prefix(3), id: \.path) { url in
-                                    Button(url.lastPathComponent) {
-                                        localProfilePath = url.path
-                                        dirty = true
-                                        Task {
-                                            if var updated = buildDraftWithSource() {
-                                                updated.source = .localClashProfile(path: url.path)
-                                                await appState.refreshAvailableNodes(for: updated)
-                                            }
-                                        }
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .controlSize(.mini)
-                                }
-                            }
-                        }
-
-                        Text("PinGate 通过 DispatchSource 监听该 YAML 文件变更，订阅更新时自动提取节点并热重载 mihomo。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-
-                case .remoteSubscription:
-                    VStack(alignment: .leading, spacing: 8) {
-                        TextField("https://provider.example.com/subscribe?...", text: $subscriptionURL)
-                            .textFieldStyle(.roundedBorder)
-                            .onChange(of: subscriptionURL) { _, _ in dirty = true }
-                        Stepper("每 \(subscriptionInterval) 分钟自动刷新", value: $subscriptionInterval, in: 5...1440, step: 15)
-                            .onChange(of: subscriptionInterval) { _, _ in dirty = true }
-                    }
-
-                case .manualYAML:
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("粘贴 Clash proxies YAML 片段（将以 0600 权限安全存储）：")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        TextEditor(text: $manualYAMLText)
-                            .font(.system(.caption, design: .monospaced))
-                            .frame(minHeight: 110)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 6)
-                                    .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
-                            )
-                            .onChange(of: manualYAMLText) { _, _ in dirty = true }
-                    }
-
-                case .upstreamProxy:
-                    Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
-                        GridRow {
-                            Text("协议").foregroundStyle(.secondary)
-                            Picker("", selection: $upstreamScheme) {
-                                ForEach(UpstreamScheme.allCases, id: \.self) { scheme in
-                                    Text(scheme.rawValue.uppercased()).tag(scheme)
-                                }
-                            }
-                            .labelsHidden()
-                            .frame(width: 110)
-                            .onChange(of: upstreamScheme) { _, _ in dirty = true }
-                        }
-                        GridRow {
-                            Text("主机与端口").foregroundStyle(.secondary)
-                            HStack {
-                                TextField("127.0.0.1", text: $upstreamHost)
-                                    .textFieldStyle(.roundedBorder)
-                                    .onChange(of: upstreamHost) { _, _ in dirty = true }
-                                TextField("7890", value: $upstreamPort, format: .number.grouping(.never))
-                                    .textFieldStyle(.roundedBorder)
-                                    .frame(width: 85)
-                                    .onChange(of: upstreamPort) { _, _ in dirty = true }
-                            }
-                        }
-                        GridRow {
-                            Text("认证（可选）").foregroundStyle(.secondary)
-                            HStack {
-                                TextField("用户名", text: $upstreamUsername)
-                                    .textFieldStyle(.roundedBorder)
-                                    .onChange(of: upstreamUsername) { _, _ in dirty = true }
-                                SecureField("密码", text: $upstreamPassword)
-                                    .textFieldStyle(.roundedBorder)
-                                    .onChange(of: upstreamPassword) { _, _ in dirty = true }
-                            }
-                        }
-                    }
-                }
-            }
-            .padding(8)
-        }
-    }
-
-    private func nodeSelectionCard(outlet: OutletConfig) -> some View {
-        GroupBox("主备节点（自动递归解析 dialer-proxy 链）") {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 10) {
-                    Text("主节点")
-                        .foregroundStyle(.secondary)
-                        .frame(width: 110, alignment: .trailing)
-                    TextField("Clash 节点精确名称", text: binding(\.primaryNodeName))
-                        .textFieldStyle(.roundedBorder)
-
-                    if !appState.availableProfileNodes.isEmpty {
-                        Menu("从配置选择") {
-                            ForEach(appState.availableProfileNodes, id: \.self) { node in
-                                Button(node) {
-                                    draftOutlet?.primaryNodeName = node
-                                    dirty = true
-                                }
-                            }
-                        }
-                        .frame(width: 130)
-                    }
-
-                    if let ms = appState.nodeLatenciesMs[outlet.primaryNodeName] {
-                        latencyBadge(ms)
-                    }
-
-                    Button("测速") {
-                        Task { await appState.testLatency(nodeName: outlet.primaryNodeName, outlet: outlet) }
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
-                    .disabled(!appState.outletRunning || outlet.primaryNodeName.isEmpty)
-                }
+                    .disabled(!appState.outletRunning || appState.isProbingExitIP)
 
-                Divider()
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("备用节点")
-                        .font(.subheadline.weight(.medium))
-
-                    if outlet.fallbackNodeNames.isEmpty {
-                        Text("暂未配置备用节点。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(outlet.fallbackNodeNames, id: \.self) { node in
-                            HStack {
-                                Text(node)
-                                    .font(.body)
-                                Spacer()
-                                if let ms = appState.nodeLatenciesMs[node] {
-                                    latencyBadge(ms)
-                                }
-                                Button("测速") {
-                                    Task { await appState.testLatency(nodeName: node, outlet: outlet) }
-                                }
-                                .buttonStyle(.borderless)
-                                .controlSize(.small)
-                                .disabled(!appState.outletRunning)
-
-                                Button(role: .destructive) {
-                                    draftOutlet?.fallbackNodeNames.removeAll { $0 == node }
-                                    dirty = true
-                                } label: {
-                                    Image(systemName: "trash")
-                                }
-                                .buttonStyle(.borderless)
+                    Button {
+                        Task { await appState.testAllLatencies(outlet: outlet) }
+                    } label: {
+                        if appState.isTestingAllLatencies {
+                            HStack(spacing: 4) {
+                                ProgressView().controlSize(.mini)
+                                Text("测速中…")
                             }
-                            .padding(.vertical, 2)
+                        } else {
+                            Text("全部测速")
                         }
                     }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(!appState.outletRunning || appState.isTestingAllLatencies)
 
-                    HStack {
-                        TextField("输入备用节点名称…", text: $newFallbackNode)
+                    Menu {
+                        Button("立即同步订阅") {
+                            Task { await appState.syncNow(outlet: outlet) }
+                        }
+                        .disabled(appState.isSyncing)
+
+                        if appState.outletRunning {
+                            Divider()
+                            Button("重启通道…") {
+                                showRestartConfirm = true
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .help("更多通道操作")
+                }
+            }
+
+            Divider()
+
+            // Primary Node Row
+            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 12) {
+                GridRow {
+                    Text("主节点")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 84, alignment: .trailing)
+
+                    HStack(spacing: 8) {
+                        TextField("输入或选择节点名称", text: binding(\.primaryNodeName))
                             .textFieldStyle(.roundedBorder)
+
                         if !appState.availableProfileNodes.isEmpty {
-                            Menu("选择") {
+                            Menu("选择节点") {
                                 ForEach(appState.availableProfileNodes, id: \.self) { node in
                                     Button(node) {
-                                        appendFallback(node)
+                                        draftOutlet?.primaryNodeName = node
                                     }
                                 }
                             }
+                            .fixedSize()
                         }
-                        Button("添加") {
-                            appendFallback(newFallbackNode)
-                            newFallbackNode = ""
+
+                        if let ms = appState.nodeLatenciesMs[outlet.primaryNodeName] {
+                            latencyBadge(ms)
                         }
-                        .disabled(newFallbackNode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                        Button {
+                            Task { await appState.testLatency(nodeName: outlet.primaryNodeName, outlet: outlet) }
+                        } label: {
+                            if appState.testingLatencyNodes.contains(outlet.primaryNodeName) {
+                                ProgressView().controlSize(.mini)
+                            } else {
+                                Text("测速")
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(
+                            !appState.outletRunning
+                                || outlet.primaryNodeName.isEmpty
+                                || appState.testingLatencyNodes.contains(outlet.primaryNodeName)
+                        )
+                    }
+                }
+
+                // Fallback Nodes Row
+                GridRow(alignment: .top) {
+                    Text("备用节点")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 84, alignment: .trailing)
+                        .padding(.top, 4)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        if !outlet.fallbackNodeNames.isEmpty {
+                            VStack(spacing: 6) {
+                                ForEach(outlet.fallbackNodeNames, id: \.self) { node in
+                                    HStack(spacing: 8) {
+                                        Text(node)
+                                            .font(.subheadline)
+                                        Spacer()
+                                        if let ms = appState.nodeLatenciesMs[node] {
+                                            latencyBadge(ms)
+                                        }
+                                        Button {
+                                            Task { await appState.testLatency(nodeName: node, outlet: outlet) }
+                                        } label: {
+                                            if appState.testingLatencyNodes.contains(node) {
+                                                ProgressView().controlSize(.mini)
+                                            } else {
+                                                Text("测速")
+                                            }
+                                        }
+                                        .buttonStyle(.borderless)
+                                        .controlSize(.small)
+                                        .disabled(!appState.outletRunning || appState.testingLatencyNodes.contains(node))
+
+                                        Button(role: .destructive) {
+                                            draftOutlet?.fallbackNodeNames.removeAll { $0 == node }
+                                        } label: {
+                                            Image(systemName: "minus.circle")
+                                        }
+                                        .buttonStyle(.borderless)
+                                    }
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .fill(Color.primary.opacity(0.04))
+                                    )
+                                }
+                            }
+                        }
+
+                        HStack(spacing: 8) {
+                            TextField("添加备用节点名称…", text: $newFallbackNode)
+                                .textFieldStyle(.roundedBorder)
+                                .onSubmit {
+                                    appendFallback(newFallbackNode)
+                                    newFallbackNode = ""
+                                }
+
+                            if !appState.availableProfileNodes.isEmpty {
+                                Menu("选择") {
+                                    ForEach(appState.availableProfileNodes, id: \.self) { node in
+                                        Button(node) {
+                                            appendFallback(node)
+                                        }
+                                    }
+                                }
+                                .fixedSize()
+                            }
+
+                            Button("添加") {
+                                appendFallback(newFallbackNode)
+                                newFallbackNode = ""
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(newFallbackNode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        }
                     }
                 }
             }
-            .padding(8)
         }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        )
     }
 
-    private var actionBar: some View {
-        HStack {
-            if appState.config.outlets.count > 1, let id = draftOutlet?.id {
-                Button("删除出口", role: .destructive) {
-                    deleteOutlet(id: id)
+    // MARK: - Layer 1B: Subscription / Proxy Source
+
+    private var sourceConfigCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("订阅与代理来源")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    if let outlet = buildDraftWithSource() ?? savedOutlet {
+                        Task { await appState.syncNow(outlet: outlet) }
+                    }
+                } label: {
+                    if appState.isSyncing {
+                        HStack(spacing: 4) {
+                            ProgressView().controlSize(.mini)
+                            Text("同步中…")
+                        }
+                    } else {
+                        Label("立即同步", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(appState.isSyncing)
+            }
+
+            Picker("来源类型", selection: $sourceKind) {
+                ForEach(SourceKindTab.allCases) { tab in
+                    Text(tab.rawValue).tag(tab)
                 }
             }
+            .labelsHidden()
+            .pickerStyle(.segmented)
 
-            Spacer()
+            switch sourceKind {
+            case .localProfile:
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        TextField(
+                            "~/Library/Application Support/com.follow.clash/profiles/...",
+                            text: $localProfilePath
+                        )
+                        .textFieldStyle(.roundedBorder)
 
-            if dirty {
-                Text("有未保存的更改")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
+                        Button("选择…") {
+                            browseForProfileYAML()
+                        }
+                    }
+
+                    if !appState.discoveredFlClashProfiles.isEmpty {
+                        HStack(spacing: 8) {
+                            Text("本机已发现 FlClash 配置：")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            ForEach(appState.discoveredFlClashProfiles.prefix(3), id: \.path) { url in
+                                Button(url.lastPathComponent) {
+                                    localProfilePath = url.path
+                                    Task {
+                                        if var updated = buildDraftWithSource() {
+                                            updated.source = .localClashProfile(path: url.path)
+                                            await appState.refreshAvailableNodes(for: updated)
+                                        }
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.mini)
+                            }
+                        }
+                    }
+
+                    Text("订阅更新后将自动同步节点，并自动解析前置代理链。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+            case .remoteSubscription:
+                VStack(alignment: .leading, spacing: 8) {
+                    TextField("https://provider.example.com/subscribe?...", text: $subscriptionURL)
+                        .textFieldStyle(.roundedBorder)
+                    Stepper("每 \(subscriptionInterval) 分钟自动刷新", value: $subscriptionInterval, in: 5...1440, step: 15)
+                        .font(.subheadline)
+                }
+
+            case .manualYAML:
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("粘贴 Clash proxies YAML 片段（将自动安全存储）：")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextEditor(text: $manualYAMLText)
+                        .font(.system(.caption, design: .monospaced))
+                        .frame(minHeight: 110)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+                        )
+                }
+
+            case .upstreamProxy:
+                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
+                    GridRow {
+                        Text("协议")
+                            .foregroundStyle(.secondary)
+                            .frame(width: 84, alignment: .trailing)
+                        Picker("协议", selection: $upstreamScheme) {
+                            ForEach(UpstreamScheme.allCases, id: \.self) { scheme in
+                                Text(scheme.rawValue.uppercased()).tag(scheme)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 110)
+                    }
+                    GridRow {
+                        Text("主机与端口")
+                            .foregroundStyle(.secondary)
+                            .frame(width: 84, alignment: .trailing)
+                        HStack {
+                            TextField("127.0.0.1", text: $upstreamHost)
+                                .textFieldStyle(.roundedBorder)
+                            TextField("7890", value: $upstreamPort, format: .number.grouping(.never))
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 85)
+                        }
+                    }
+                    GridRow {
+                        Text("认证（可选）")
+                            .foregroundStyle(.secondary)
+                            .frame(width: 84, alignment: .trailing)
+                        HStack {
+                            TextField("用户名", text: $upstreamUsername)
+                                .textFieldStyle(.roundedBorder)
+                            SecureField("密码", text: $upstreamPassword)
+                                .textFieldStyle(.roundedBorder)
+                        }
+                    }
+                }
             }
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        )
+    }
 
+    // MARK: - Layer 2: Collapsible Advanced Network Settings
+
+    private func advancedNetworkSection(outlet: OutletConfig) -> some View {
+        DisclosureGroup("高级网络设置", isExpanded: $showAdvancedNetwork) {
+            VStack(alignment: .leading, spacing: 12) {
+                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
+                    GridRow {
+                        Text("出口名称")
+                            .foregroundStyle(.secondary)
+                            .frame(width: 84, alignment: .trailing)
+                        TextField("主出口", text: binding(\.name))
+                            .textFieldStyle(.roundedBorder)
+                    }
+
+                    GridRow {
+                        Text("监听地址")
+                            .foregroundStyle(.secondary)
+                            .frame(width: 84, alignment: .trailing)
+                        HStack(spacing: 8) {
+                            TextField("127.0.0.1", text: binding(\.listenHost))
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 130)
+                            Text(":")
+                            TextField("17899", value: binding(\.listenPort), format: .number.grouping(.never))
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 80)
+                            Text("控制端口")
+                                .foregroundStyle(.secondary)
+                                .padding(.leading, 8)
+                            TextField("17890", value: binding(\.controllerPort), format: .number.grouping(.never))
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 80)
+                        }
+                    }
+
+                    GridRow {
+                        Text("预期地区")
+                            .foregroundStyle(.secondary)
+                            .frame(width: 84, alignment: .trailing)
+                        HStack(spacing: 8) {
+                            TextField("国家代码（如 US）", text: Binding(
+                                get: { draftOutlet?.expectedCountryCode ?? "" },
+                                set: { val in
+                                    draftOutlet?.expectedCountryCode = val.isEmpty ? nil : val.uppercased()
+                                }
+                            ))
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 150)
+
+                            TextField("预期出口 IP 提示（可选）", text: Binding(
+                                get: { draftOutlet?.expectedIPHint ?? "" },
+                                set: { val in
+                                    draftOutlet?.expectedIPHint = val.isEmpty ? nil : val
+                                }
+                            ))
+                            .textFieldStyle(.roundedBorder)
+                        }
+                    }
+                }
+
+                if appState.config.outlets.count > 1 {
+                    Divider()
+                    HStack {
+                        Spacer()
+                        Button("删除此出口…", role: .destructive) {
+                            showDeleteConfirm = true
+                        }
+                        .controlSize(.small)
+                    }
+                }
+            }
+            .padding(.top, 10)
+        }
+        .font(.subheadline.weight(.medium))
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    // MARK: - Contextual Save Bar (Only Shown When Dirty)
+
+    private var unsavedChangesBar: some View {
+        HStack(spacing: 10) {
+            StatusDotLabel(text: "有未保存的更改", color: .orange, emphasized: true)
+            Spacer()
+            Button("还原") {
+                if let saved = savedOutlet {
+                    populateDraft(from: saved)
+                }
+            }
+            .buttonStyle(.bordered)
             Button("保存并应用") {
                 saveDraft()
             }
             .buttonStyle(.borderedProminent)
-            .disabled(draftOutlet == nil)
+            .keyboardShortcut("s", modifiers: .command)
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.orange.opacity(0.09))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.orange.opacity(0.28), lineWidth: 1)
+        )
     }
 
     private func latencyBadge(_ ms: Int) -> some View {
@@ -509,9 +650,11 @@ struct OutletsView: View {
             .font(.caption2.monospaced().weight(.semibold))
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .background(Capsule().fill(color.opacity(0.15)))
+            .background(Capsule().fill(color.opacity(0.14)))
             .foregroundStyle(color)
     }
+
+    // MARK: - Draft Management
 
     private func loadInitialSelection() {
         let target = appState.config.primaryOutlet() ?? appState.config.outlets.first
@@ -526,7 +669,6 @@ struct OutletsView: View {
 
     private func populateDraft(from outlet: OutletConfig) {
         draftOutlet = outlet
-        dirty = false
         switch outlet.source {
         case .localClashProfile(let path):
             sourceKind = .localProfile
@@ -581,7 +723,6 @@ struct OutletsView: View {
             cfg.outlets.append(updated)
         }
         draftOutlet = updated
-        dirty = false
         Task {
             await appState.saveConfig(cfg, triggerSync: true)
             await appState.refreshAvailableNodes(for: updated)
@@ -620,7 +761,6 @@ struct OutletsView: View {
         if !outlet.fallbackNodeNames.contains(trimmed) {
             outlet.fallbackNodeNames.append(trimmed)
             draftOutlet = outlet
-            dirty = true
         }
     }
 
@@ -632,7 +772,6 @@ struct OutletsView: View {
         panel.title = "选择 Clash / FlClash 配置文件 (YAML)"
         if panel.runModal() == .OK, let url = panel.url {
             localProfilePath = url.path
-            dirty = true
             if var updated = buildDraftWithSource() {
                 updated.source = .localClashProfile(path: url.path)
                 Task { await appState.refreshAvailableNodes(for: updated) }
@@ -645,7 +784,6 @@ struct OutletsView: View {
             get: { draftOutlet![keyPath: keyPath] },
             set: { newValue in
                 draftOutlet?[keyPath: keyPath] = newValue
-                dirty = true
             }
         )
     }

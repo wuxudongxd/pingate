@@ -1,0 +1,33 @@
+# Swift Package Manager & Xcode
+.build/
+.swiftpm/
+Packages/
+Package.pins
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+
+# Build & Release Artifacts
+build/
+dist/
+*.app/
+*.dmg
+*.icns
+*.pkg
+SHA256SUMS*
+
+# macOS Metadata
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Local runtime state & secrets (never commit)
+config.json
+mihomo.yaml
+*.secret
+*.key
+*.pem
+.env
+.env.*

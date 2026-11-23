@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build & Test (macOS 15 arm64)
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Show Swift & macOS environment
+        run: |
+          sw_vers
+          swift --version
+
+      - name: Run unit tests
+        run: swift test --parallel
+
+      - name: Build & bundle PinGate.app (staging)
+        run: |
+          mkdir -p ./dist/app ./dist/bin
+          ./Scripts/bundle_app.sh --output-dir ./dist/app --cli-dir ./dist/bin
+          test -d ./dist/app/PinGate.app
+          test -x ./dist/bin/pingate
+          codesign --verify --deep --strict ./dist/app/PinGate.app
+
+      - name: Verify migration script syntax & dry-run
+        run: |
+          bash -n ./Scripts/bundle_app.sh
+          bash -n ./Scripts/migrate_from_legacy.sh
+          ./Scripts/migrate_from_legacy.sh --dry-run

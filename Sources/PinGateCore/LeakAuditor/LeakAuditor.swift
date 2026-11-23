@@ -288,27 +288,27 @@ public struct LeakAuditor: Sendable {
             overallState = .leaking
             var parts: [String] = []
             if totalLeaks > 0 {
-                parts.append("\(totalLeaks) 条直连漏网连接")
+                parts.append("\(totalLeaks) 条未走代理的连接")
             }
             if missingOrWrongEnvCount > 0 {
-                parts.append("\(missingOrWrongEnvCount) 个进程缺失代理环境变量或端口不匹配")
+                parts.append("\(missingOrWrongEnvCount) 个应用进程缺少代理配置或端口不匹配")
             }
             if !outletRunning {
-                parts.append("出口代理已停止")
+                parts.append("代理出口已关闭")
             }
-            summary = "检测到漏网风险：" + parts.joined(separator: "，")
+            summary = "发现直连风险：" + parts.joined(separator: "，")
         } else if !outletRunning {
             overallState = .stopped
-            summary = "出口代理未监听（已扫描 \(audits.count) 个目标进程）"
+            summary = "代理出口已关闭（已检测 \(audits.count) 个应用进程）"
         } else if unreadableCount > 0 {
             overallState = .warning
-            summary = "\(unreadableCount) 个进程环境变量不可读；\(totalProxied) 条代理连接，0 漏网"
+            summary = "\(unreadableCount) 个应用进程无法读取环境；\(totalProxied) 条代理连接，0 漏网"
         } else if audits.isEmpty {
             overallState = .protected
-            summary = "出口运行中；当前无活跃受保护目标进程"
+            summary = "代理出口运行中；当前无运行中的应用进程"
         } else {
             overallState = .protected
-            summary = "\(audits.count) 个进程受保护（\(totalProxied) 条代理连接，\(totalBypass) 条内网直连，0 漏网）"
+            summary = "\(audits.count) 个应用进程保护中（\(totalProxied) 条代理连接，\(totalBypass) 条直连，0 漏网）"
         }
 
         return AuditSnapshot(
@@ -337,23 +337,23 @@ public struct LeakAuditor: Sendable {
             (CIDRNetwork.isLoopback(normalizedOutletHost) && CIDRNetwork.isLoopback(normalizedRemote))
 
         if isOutletHost && Int(socket.remotePort) == outletPort {
-            return (.proxied, "已通过 PinGate 出口代理 \(normalizedRemote):\(outletPort)")
+            return (.proxied, "已通过本地代理 \(normalizedRemote):\(outletPort)")
         }
 
         if CIDRNetwork.isLoopback(normalizedRemote) {
-            return (.loopback, "本地回环通信（\(normalizedRemote):\(socket.remotePort)）")
+            return (.loopback, "本机连接（\(normalizedRemote):\(socket.remotePort)）")
         }
 
         // Check explicitly flagged suspicious IPs BEFORE bypass CIDRs so hijacked private-range IPs are caught.
         if suspiciousDirectIPs.contains(normalizedRemote) {
-            return (.leak, "直连至可疑/黑洞 IP \(normalizedRemote):\(socket.remotePort)")
+            return (.leak, "直连至异常 IP \(normalizedRemote):\(socket.remotePort)")
         }
 
         for cidr in bypassCIDRs where cidr.contains(ipAddress: normalizedRemote) {
-            return (.bypass, "命中内网直连白名单 \(cidr.rawValue)")
+            return (.bypass, "命中直连规则 \(cidr.rawValue)")
         }
 
-        return (.leak, "未走代理的直连流量 \(normalizedRemote):\(socket.remotePort)")
+        return (.leak, "未走代理的直连 \(normalizedRemote):\(socket.remotePort)")
     }
 
     /// Evaluates whether a process has valid proxy environment variables (or Chromium `--proxy-server` flag) targeting `expectedPort`.

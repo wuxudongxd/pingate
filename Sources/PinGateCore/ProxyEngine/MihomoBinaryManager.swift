@@ -159,7 +159,7 @@ public struct MihomoBinaryManager: Sendable {
         }
 
         throw MihomoBinaryError.binaryNotFound(
-            "托管路径 \(binaryURL.path) 不存在，且未找到可用的本地种子二进制文件。"
+            "本地路径 \(binaryURL.path) 不存在，且未找到可用的本地种子二进制文件。"
         )
     }
 

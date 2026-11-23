@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release version tag (e.g. v1.0.0)'
+        description: 'Release version tag (e.g. v0.1.0)'
         required: true
         type: string
 
@@ -16,12 +16,14 @@ permissions:
 
 jobs:
   release:
-    name: Build, Package DMG & Publish Release (macOS 15 arm64)
+    name: Build, Package ZIP/DMG & Publish Release (macOS 15 arm64)
     runs-on: macos-15
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Determine release version
         id: meta
@@ -41,13 +43,18 @@ jobs:
             --output-dir ./dist/app \
             --cli-dir ./dist/bin \
             --version "${{ steps.meta.outputs.version }}"
+          test -x ./dist/app/PinGate.app/Contents/Resources/bin/pingate
+          codesign --verify --deep --strict ./dist/app/PinGate.app
 
-      - name: Create DMG & CLI tarball
+      - name: Create ZIP, DMG & SHA256SUMS
         run: |
+          TAG="${{ steps.meta.outputs.tag }}"
           VERSION="${{ steps.meta.outputs.version }}"
           DMG_STAGE="./dist/dmg-stage"
-          DMG_OUT="./dist/release/PinGate-${VERSION}-arm64.dmg"
-          CLI_TAR="./dist/release/pingate-cli-${VERSION}-arm64.tar.gz"
+          ZIP_OUT="./dist/release/PinGate-${TAG}-arm64.zip"
+          DMG_OUT="./dist/release/PinGate-${TAG}-arm64.dmg"
+
+          ditto -c -k --sequesterRsrc --keepParent ./dist/app/PinGate.app "${ZIP_OUT}"
 
           mkdir -p "${DMG_STAGE}"
           cp -R ./dist/app/PinGate.app "${DMG_STAGE}/PinGate.app"
@@ -60,13 +67,11 @@ jobs:
             -format UDZO \
             "${DMG_OUT}"
 
-          tar -C ./dist/bin -czf "${CLI_TAR}" pingate
-
           (
             cd ./dist/release
             shasum -a 256 \
-              "PinGate-${VERSION}-arm64.dmg" \
-              "pingate-cli-${VERSION}-arm64.tar.gz" \
+              "PinGate-${TAG}-arm64.zip" \
+              "PinGate-${TAG}-arm64.dmg" \
               > SHA256SUMS.txt
           )
           cat ./dist/release/SHA256SUMS.txt
@@ -78,6 +83,6 @@ jobs:
           name: PinGate ${{ steps.meta.outputs.tag }}
           generate_release_notes: true
           files: |
-            dist/release/PinGate-${{ steps.meta.outputs.version }}-arm64.dmg
-            dist/release/pingate-cli-${{ steps.meta.outputs.version }}-arm64.tar.gz
+            dist/release/PinGate-${{ steps.meta.outputs.tag }}-arm64.zip
+            dist/release/PinGate-${{ steps.meta.outputs.tag }}-arm64.dmg
             dist/release/SHA256SUMS.txt

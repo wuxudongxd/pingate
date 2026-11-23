@@ -484,19 +484,34 @@ final class CoreEngineTests: XCTestCase {
 
     func testChineseLocalizationAndCodableRawValuesUnchanged() {
         XCTAssertEqual(HealthState.protected.rawValue, "protected")
-        XCTAssertEqual(HealthState.protected.displayName, "已受保护")
+        XCTAssertEqual(HealthState.protected.displayName, "保护中")
+        XCTAssertEqual(HealthState.warning.displayName, "需注意")
         XCTAssertEqual(HealthState.leaking.displayName, "发现漏网")
-        XCTAssertEqual(SocketClassification.proxied.displayName, "已走代理")
-        XCTAssertEqual(SocketClassification.leak.displayName, "疑似漏网")
-        XCTAssertEqual(ProxyEnvStatus.missing.displayName, "缺少代理环境变量")
+        XCTAssertEqual(HealthState.stopped.displayName, "已关闭")
+        XCTAssertEqual(SocketClassification.proxied.displayName, "已代理")
+        XCTAssertEqual(SocketClassification.loopback.displayName, "本机连接")
+        XCTAssertEqual(SocketClassification.bypass.displayName, "直连")
+        XCTAssertEqual(SocketClassification.leak.displayName, "未走代理")
+        XCTAssertEqual(ProxyEnvStatus.valid.displayName, "代理环境正常")
+        XCTAssertEqual(ProxyEnvStatus.missing.displayName, "缺少代理配置")
+        XCTAssertEqual(ProxyEnvStatus.unreadable.displayName, "无法读取进程环境")
         XCTAssertEqual(CaptureMode.userSpace.rawValue, "userSpace")
-        XCTAssertEqual(CaptureMode.userSpace.displayName, "用户态托管模式（阶段 1–2）")
+        XCTAssertEqual(CaptureMode.userSpace.displayName, "标准代理模式")
+        XCTAssertEqual(CaptureMode.systemExtension.displayName, "系统扩展模式（透明代理）")
         XCTAssertEqual(TargetKind.guiApp.rawValue, "guiApp")
         XCTAssertEqual(TargetKind.guiApp.displayName, "桌面应用")
+        XCTAssertEqual(TargetKind.cliTool.displayName, "命令行工具")
+        XCTAssertEqual(TargetKind.t3Integration.displayName, "T3 Code 集成")
         XCTAssertEqual(MihomoProcessState.running.displayName, "运行中")
 
         XCTAssertTrue(
             ClashProfileParserError.missingProxiesSection.localizedDescription.contains("未找到代理节点")
+        )
+        XCTAssertTrue(
+            ClashProfileParserError.nodeNotFound(name: "X", availableCount: 1).localizedDescription.contains("「X」")
+        )
+        XCTAssertTrue(
+            ClashProfileParserError.remoteFetchFailed("timeout").localizedDescription.contains("获取远程订阅失败")
         )
         XCTAssertTrue(
             ConfigStoreError.unsupportedSchemaVersion(99).localizedDescription.contains("不支持的 PinGate 配置版本")
@@ -507,6 +522,290 @@ final class CoreEngineTests: XCTestCase {
         XCTAssertTrue(
             MihomoProcessError.processExitedEarly(1).localizedDescription.contains("意外退出")
         )
+    }
+
+    // MARK: - Telemetry Blocking & Backward Compatibility
+
+    func testTelemetryBlockingRulesAndBackwardCompatibility() throws {
+        // 1. Legacy JSON missing `blockTelemetry` and `autoCheckUpdates` must decode with both defaulting to `true`
+        let outletID = UUID()
+        let legacyJSON = """
+        {
+          "schemaVersion": 1,
+          "outlets": [{
+            "id": "\(outletID.uuidString)",
+            "name": "Test",
+            "listenHost": "127.0.0.1",
+            "listenPort": 19899,
+            "controllerPort": 19890,
+            "controllerSecret": "sec",
+            "source": { "manualYAML": { "yaml": "name: N\\ntype: http\\nserver: 127.0.0.1\\nport: 8080" } },
+            "primaryNodeName": "N",
+            "fallbackNodeNames": [],
+            "enabled": true
+          }],
+          "targets": [],
+          "bypassRules": {
+            "domains": [".corp.example.com"],
+            "cidrs": ["127.0.0.0/8", "10.0.0.0/8"],
+            "extraNoProxyEntries": ["localhost"]
+          },
+          "auditPolicy": {
+            "pollIntervalSeconds": 3,
+            "failClosedOnPortDown": true,
+            "warnOnExitIPChange": true,
+            "notifyOnLeak": true,
+            "suspiciousDirectIPs": [],
+            "probeTimeoutSeconds": 6
+          },
+          "captureMode": "userSpace"
+        }
+        """
+        let decoded = try JSONDecoder().decode(PinGateConfig.self, from: Data(legacyJSON.utf8))
+        XCTAssertTrue(decoded.autoCheckUpdates)
+        XCTAssertTrue(decoded.bypassRules.blockTelemetry)
+        XCTAssertTrue(decoded.blockTelemetry)
+
+        // 2. Render with blockTelemetry == true -> all 14 REJECT rules appear AFTER DIRECT and BEFORE MATCH,OUTLET
+        let node = RawProxyNode(
+            name: "N",
+            fields: ["name": .string("N"), "type": .string("http"), "server": .string("127.0.0.1"), "port": .int(8080)]
+        )
+        let chain = ExtractedProxyChain(
+            primaryNodeName: "N",
+            orderedProxyNames: ["N"],
+            outletGroupMembers: ["N"],
+            availableFallbackNames: [],
+            missingFallbackNames: [],
+            proxies: [node]
+        )
+        let renderer = MihomoConfigRenderer()
+        let yamlOn = try renderer.renderYAML(outlet: decoded.outlets[0], chain: chain, bypassRules: decoded.bypassRules)
+        let parsedOn = try XCTUnwrap(try Yams.load(yaml: yamlOn) as? [String: Any])
+        let rulesOn = try XCTUnwrap(parsedOn["rules"] as? [String])
+
+        let lastDirectIndex = try XCTUnwrap(rulesOn.lastIndex(where: { $0.contains(",DIRECT") }))
+        let matchIndex = try XCTUnwrap(rulesOn.firstIndex(of: "MATCH,OUTLET"))
+        XCTAssertEqual(MihomoConfigRenderer.builtInTelemetryRules.count, 14)
+
+        for rejectRule in MihomoConfigRenderer.builtInTelemetryRules {
+            let idx = try XCTUnwrap(rulesOn.firstIndex(of: rejectRule), "Missing telemetry rule: \(rejectRule)")
+            XCTAssertGreaterThan(idx, lastDirectIndex, "Telemetry REJECT rule must appear after DIRECT rules")
+            XCTAssertLessThan(idx, matchIndex, "Telemetry REJECT rule must appear before MATCH,OUTLET")
+        }
+
+        // 3. Verify NONE of the 6 allowed model/login/asset domains match any telemetry suffix or wildcard rule
+        let allowedDomains = [
+            "daily-cloudcode-pa.googleapis.com",
+            "aicode.googleapis.com",
+            "www.googleapis.com",
+            "oauth2.googleapis.com",
+            "gstatic.com",
+            "lh3.googleusercontent.com"
+        ]
+        for domain in allowedDomains {
+            for suffix in MihomoConfigRenderer.builtInTelemetryDomainSuffixes {
+                XCTAssertFalse(
+                    domain == suffix || domain.hasSuffix("." + suffix),
+                    "Allowed domain \(domain) must NOT match telemetry suffix \(suffix)"
+                )
+            }
+            for wildcard in MihomoConfigRenderer.builtInTelemetryDomainWildcards {
+                let regexPattern = "^" + NSRegularExpression.escapedPattern(for: wildcard)
+                    .replacingOccurrences(of: "\\*", with: "[^.]*") + "$"
+                let matches = domain.range(of: regexPattern, options: .regularExpression) != nil
+                XCTAssertFalse(matches, "Allowed domain \(domain) must NOT match telemetry wildcard \(wildcard)")
+            }
+        }
+
+        // 4. Verify blockTelemetry == false omits all 14 REJECT rules
+        var disabledRules = decoded.bypassRules
+        disabledRules.blockTelemetry = false
+        let yamlOff = try renderer.renderYAML(outlet: decoded.outlets[0], chain: chain, bypassRules: disabledRules)
+        let parsedOff = try XCTUnwrap(try Yams.load(yaml: yamlOff) as? [String: Any])
+        let rulesOff = try XCTUnwrap(parsedOff["rules"] as? [String])
+        for rejectRule in MihomoConfigRenderer.builtInTelemetryRules {
+            XCTAssertFalse(rulesOff.contains(rejectRule), "Rule \(rejectRule) must be omitted when blockTelemetry is false")
+        }
+    }
+
+    // MARK: - AppUpdater
+
+    func testAppUpdaterSemVerAndSHA256SumsParsing() throws {
+        let v009 = try XCTUnwrap(SemanticVersion(string: "0.0.9"))
+        let v010 = try XCTUnwrap(SemanticVersion(string: "v0.1.0"))
+        let v010Beta1 = try XCTUnwrap(SemanticVersion(string: "v0.1.0-beta.1"))
+        let v010Beta2 = try XCTUnwrap(SemanticVersion(string: "0.1.0-beta.2+build42"))
+        let v12 = try XCTUnwrap(SemanticVersion(string: "1.2"))
+
+        XCTAssertLessThan(v009, v010)
+        XCTAssertLessThan(v010Beta1, v010Beta2)
+        XCTAssertLessThan(v010Beta2, v010)
+        XCTAssertEqual(v12, SemanticVersion(major: 1, minor: 2, patch: 0))
+        XCTAssertEqual(v010.tagString, "v0.1.0")
+        XCTAssertNil(SemanticVersion(string: "not-a-version"))
+
+        let sampleHash = String(repeating: "a", count: 64)
+        let sumsText = """
+        # comment line
+        \(sampleHash)  PinGate-v0.1.0-arm64.zip
+        \(String(repeating: "b", count: 64)) *./dist/PinGate-v0.1.0-arm64.dmg
+        """
+        let parsed = AppUpdater.parseSHA256Sums(sumsText)
+        XCTAssertEqual(parsed["PinGate-v0.1.0-arm64.zip"], sampleHash)
+        XCTAssertEqual(parsed["PinGate-v0.1.0-arm64.dmg"], String(repeating: "b", count: 64))
+    }
+
+    func testAppUpdaterCheckDownloadVerifyAndUpgradeScript() async throws {
+        // Build a synthetic ad-hoc signed PinGate.app and zip it with ditto
+        let syntheticRoot = tempDir.appendingPathComponent("synthetic-release", isDirectory: true)
+        let appBundle = syntheticRoot.appendingPathComponent("PinGate.app", isDirectory: true)
+        let macOSDir = appBundle.appendingPathComponent("Contents/MacOS", isDirectory: true)
+        let resourcesBinDir = appBundle.appendingPathComponent("Contents/Resources/bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: macOSDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: resourcesBinDir, withIntermediateDirectories: true)
+
+        let infoPlist = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0"><dict>
+          <key>CFBundleIdentifier</key><string>com.pingate.test</string>
+          <key>CFBundleExecutable</key><string>PinGateApp</string>
+          <key>CFBundleShortVersionString</key><string>0.1.0</string>
+        </dict></plist>
+        """
+        try infoPlist.write(to: appBundle.appendingPathComponent("Contents/Info.plist"), atomically: true, encoding: .utf8)
+
+        let fakeExec = macOSDir.appendingPathComponent("PinGateApp")
+        try "#!/bin/sh\necho ok\n".write(to: fakeExec, atomically: true, encoding: .utf8)
+        try ConfigStore.setPosixPermissions(0o755, at: fakeExec)
+
+        let fakeCLI = resourcesBinDir.appendingPathComponent("pingate")
+        try "#!/bin/sh\necho cli\n".write(to: fakeCLI, atomically: true, encoding: .utf8)
+        try ConfigStore.setPosixPermissions(0o755, at: fakeCLI)
+
+        // Ad-hoc sign the synthetic bundle and zip it
+        let signProc = Process()
+        signProc.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        signProc.arguments = ["--force", "--deep", "--sign", "-", appBundle.path]
+        try signProc.run()
+        signProc.waitUntilExit()
+        XCTAssertEqual(signProc.terminationStatus, 0)
+
+        let zipURL = syntheticRoot.appendingPathComponent("PinGate-v0.1.0-arm64.zip")
+        let dittoProc = Process()
+        dittoProc.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        dittoProc.arguments = ["-c", "-k", "--keepParent", appBundle.path, zipURL.path]
+        try dittoProc.run()
+        dittoProc.waitUntilExit()
+        XCTAssertEqual(dittoProc.terminationStatus, 0)
+
+        let zipData = try Data(contentsOf: zipURL)
+        let store = ConfigStore(baseDirectory: tempDir.appendingPathComponent("updater-store", isDirectory: true))
+        _ = try store.loadOrBootstrap()
+
+        let sessionFactory: @Sendable (OutletConfig?) -> URLSession = { _ in
+            let cfg = URLSessionConfiguration.ephemeral
+            cfg.protocolClasses = [MockURLProtocol.self]
+            return URLSession(configuration: cfg)
+        }
+        let updater = AppUpdater(repository: "example/pingate", configStore: store, sessionFactory: sessionFactory)
+        let validHash = try updater.sha256Hex(of: zipURL)
+
+        let releaseJSON = """
+        {
+          "tag_name": "v0.1.0",
+          "name": "PinGate v0.1.0",
+          "body": "Initial release notes",
+          "html_url": "https://github.com/example/pingate/releases/tag/v0.1.0",
+          "published_at": "2026-11-23T08:00:00Z",
+          "assets": [
+            {
+              "name": "PinGate-v0.1.0-arm64.zip",
+              "browser_download_url": "https://downloads.example.com/PinGate-v0.1.0-arm64.zip",
+              "size": \(zipData.count)
+            },
+            {
+              "name": "SHA256SUMS.txt",
+              "browser_download_url": "https://downloads.example.com/SHA256SUMS.txt",
+              "size": 90
+            }
+          ]
+        }
+        """
+
+        var servedChecksums = "\(validHash)  PinGate-v0.1.0-arm64.zip\n"
+        MockURLProtocol.handler = { request in
+            let url = request.url!
+            if url.path.hasSuffix("/releases/latest") {
+                return (
+                    HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!,
+                    Data(releaseJSON.utf8)
+                )
+            }
+            if url.lastPathComponent == "SHA256SUMS.txt" {
+                return (
+                    HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "text/plain"])!,
+                    Data(servedChecksums.utf8)
+                )
+            }
+            if url.lastPathComponent == "PinGate-v0.1.0-arm64.zip" {
+                return (
+                    HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: ["Content-Length": "\(zipData.count)"])!,
+                    zipData
+                )
+            }
+            return (HTTPURLResponse(url: url, statusCode: 404, httpVersion: nil, headerFields: nil)!, Data())
+        }
+        defer { MockURLProtocol.handler = nil }
+
+        // 1. Check 0.0.9 -> 0.1.0 reports updateAvailable
+        let checkResult = try await updater.checkForUpdates(currentVersion: SemanticVersion(major: 0, minor: 0, patch: 9))
+        guard case .updateAvailable(_, let release) = checkResult else {
+            XCTFail("Expected updateAvailable for 0.0.9 -> 0.1.0")
+            return
+        }
+        XCTAssertEqual(release.tagName, "v0.1.0")
+
+        // 2. Check 0.1.0 -> 0.1.0 reports upToDate
+        let sameResult = try await updater.checkForUpdates(currentVersion: SemanticVersion(major: 0, minor: 1, patch: 0))
+        XCTAssertFalse(sameResult.hasUpdate)
+
+        // 3. Download, SHA-256 verify, extract, and codesign verify
+        let prepared = try await updater.downloadAndVerify(release: release, verifyCodeSign: true)
+        XCTAssertEqual(prepared.verifiedSHA256, validHash)
+        XCTAssertTrue(prepared.stagingDirectory.path.hasPrefix(updater.updatesDirectory.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: prepared.stagedAppURL.path))
+        let updatesAttrs = try FileManager.default.attributesOfItem(atPath: updater.updatesDirectory.path)
+        XCTAssertEqual((updatesAttrs[.posixPermissions] as? NSNumber)?.intValue, 0o700)
+
+        // 4. Config backup is 0600 and update script contains expected safe swap steps
+        let backupURL = try XCTUnwrap(try updater.backupConfigIfPresent())
+        let backupAttrs = try FileManager.default.attributesOfItem(atPath: backupURL.path)
+        XCTAssertEqual((backupAttrs[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+
+        let script = AppUpdater.renderUpdateScript(
+            stagedAppPath: prepared.stagedAppURL.path,
+            targetAppPath: "/Applications/PinGate.app",
+            stagingDirectoryPath: prepared.stagingDirectory.path,
+            cliInstallPath: "/Users/example/.local/bin/pingate",
+            waitForPID: 12345,
+            relaunchApp: true
+        )
+        XCTAssertTrue(script.contains("WAIT_PID=12345"))
+        XCTAssertTrue(script.contains("TRASH_DIR=\"$HOME/.Trash\""))
+        XCTAssertTrue(script.contains("com.apple.quarantine"))
+        XCTAssertTrue(script.contains("Contents/Resources/bin/pingate"))
+        XCTAssertTrue(script.contains("/usr/bin/open \"$TARGET_APP\""))
+
+        // 5. Tampered checksum MUST fail with checksumMismatch
+        servedChecksums = "\(String(repeating: "f", count: 64))  PinGate-v0.1.0-arm64.zip\n"
+        do {
+            _ = try await updater.downloadAndVerify(release: release, verifyCodeSign: true)
+            XCTFail("Expected checksumMismatch for tampered SHA256SUMS")
+        } catch AppUpdaterError.checksumMismatch {
+            // Expected
+        }
     }
 }
 

@@ -163,15 +163,15 @@ public enum ClashProfileParserError: Error, LocalizedError, Sendable, Equatable 
         case .emptyPrimaryNodeName:
             return "主节点名称为空，请先配置主节点名称后再同步。"
         case .nodeNotFound(let name, let availableCount):
-            return "在配置文件的 \(availableCount) 个节点中未找到目标节点“\(name)”。"
+            return "在配置文件的 \(availableCount) 个节点中未找到目标节点「\(name)」。"
         case .missingDialerProxy(let node, let dialerProxy):
-            return "节点“\(node)”依赖的前置代理（dialer-proxy）“\(dialerProxy)”在配置文件中不存在。"
+            return "节点「\(node)」依赖的前置代理（dialer-proxy）「\(dialerProxy)」在配置文件中不存在。"
         case .dialerProxyCycle(let chain):
             return "检测到前置代理（dialer-proxy）循环依赖：\(chain.joined(separator: " -> "))"
         case .fileReadFailed(let message):
             return "读取配置文件失败：\(message)"
         case .remoteFetchFailed(let message):
-            return "拉取远程订阅失败：\(message)"
+            return "获取远程订阅失败：\(message)"
         case .invalidSourceConfiguration(let message):
             return "出口来源配置无效：\(message)"
         }

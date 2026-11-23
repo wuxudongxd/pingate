@@ -10,18 +10,24 @@ struct BypassRulesView: View {
     @State private var newNoProxy: String = ""
     @State private var domainError: String?
     @State private var cidrError: String?
+    @State private var showTelemetryRules: Bool = false
     @State private var showPreview: Bool = false
-    @State private var showResetConfirm: Bool = false
+    @State private var showResetAlert: Bool = false
     @State private var copiedLabel: String?
 
-    private var hasUnsavedChanges: Bool {
-        draftRules != appState.config.bypassRules
+    /// Compare only direct-bypass fields (`blockTelemetry` saves & reloads immediately on its own toggle).
+    private var hasUnsavedDirectChanges: Bool {
+        let saved = appState.config.bypassRules
+        return draftRules.domains != saved.domains
+            || draftRules.cidrs != saved.cidrs
+            || draftRules.extraNoProxyEntries != saved.extraNoProxyEntries
     }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 headerRow
+                telemetryBlockingCard
 
                 HStack(alignment: .top, spacing: 16) {
                     domainsCard
@@ -31,7 +37,7 @@ struct BypassRulesView: View {
                 extraNoProxyCard
                 previewSection
 
-                if hasUnsavedChanges {
+                if hasUnsavedDirectChanges {
                     unsavedChangesBar
                 }
             }
@@ -41,41 +47,105 @@ struct BypassRulesView: View {
             draftRules = appState.config.bypassRules
         }
         .onChange(of: appState.config.bypassRules) { _, updated in
-            if !hasUnsavedChanges {
+            draftRules.blockTelemetry = updated.blockTelemetry
+            if !hasUnsavedDirectChanges {
                 draftRules = updated
             }
         }
-        .confirmationDialog(
-            "确定要恢复默认直连白名单吗？",
-            isPresented: $showResetConfirm,
-            titleVisibility: .visible
-        ) {
+        .alert("确定要恢复默认直连规则吗？", isPresented: $showResetAlert) {
             Button("恢复默认", role: .destructive) {
-                draftRules = BypassRules()
+                let keepTelemetry = appState.config.bypassRules.blockTelemetry
+                draftRules = BypassRules(blockTelemetry: keepTelemetry)
                 domainError = nil
                 cidrError = nil
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("这将清空你添加的自定义公司内网域名，并重置私网 CIDR 与本机条目为默认值（点击保存后生效）。")
+            Text("将清空你添加的自定义内网域名，并把私网网段与本机地址恢复为默认值（保存后生效）。")
         }
     }
 
     private var headerRow: some View {
         HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("直连白名单")
+                Text("规则与隐私")
                     .font(.title2.bold())
-                Text("以下域名与私网网段将绕过代理直接走系统网络 / 公司 VPN，且不触发防漏告警。")
+                Text("以下域名、私网网段与本机地址会直接走系统网络或公司 VPN，不经过代理，也不会触发直连提醒。")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
             Spacer()
             Button("恢复默认") {
-                showResetConfirm = true
+                showResetAlert = true
             }
             .buttonStyle(.bordered)
         }
+    }
+
+    // MARK: - Telemetry & Auto-Updater Blocking Card (#39 & #41)
+
+    private var telemetryBlockingCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("拦截遥测与自动更新上报")
+                        .font(.subheadline.weight(.semibold))
+                    Text("自动拦截 Google、Sentry 等遥测日志与后台自动更新请求，不影响账号登录与 AI 模型连接。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                HStack(spacing: 8) {
+                    if appState.isTogglingTelemetry {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                    Toggle(
+                        "拦截遥测与自动更新上报",
+                        isOn: Binding(
+                            get: { appState.config.blockTelemetry },
+                            set: { enabled in
+                                Task { await appState.setBlockTelemetry(enabled) }
+                            }
+                        )
+                    )
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .tint(.green)
+                    .controlSize(.small)
+                    .disabled(appState.isTogglingTelemetry)
+                }
+            }
+
+            CollapsibleCard(
+                title: "查看内置拦截规则（\(String(MihomoConfigRenderer.builtInTelemetryRules.count)) 项）",
+                isExpanded: $showTelemetryRules,
+                compact: true
+            ) {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(MihomoConfigRenderer.builtInTelemetryRules, id: \.self) { rule in
+                        Text(rule)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                .allowsHitTesting(false)
+        )
     }
 
     private var domainsCard: some View {
@@ -115,6 +185,8 @@ struct BypassRulesView: View {
                                 draftRules.domains.removeAll { $0 == domain }
                             } label: {
                                 Image(systemName: "minus.circle")
+                                    .frame(width: 22, height: 22)
+                                    .contentShape(Rectangle())
                             }
                             .buttonStyle(.borderless)
                         }
@@ -137,12 +209,13 @@ struct BypassRulesView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                .allowsHitTesting(false)
         )
     }
 
     private var cidrsCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("私网与直连 IP CIDR")
+            Text("私网与直连网段（CIDR）")
                 .font(.headline)
 
             HStack {
@@ -162,7 +235,7 @@ struct BypassRulesView: View {
             }
 
             if draftRules.cidrs.isEmpty {
-                Text("暂未配置私网 CIDR，建议保留默认局域网网段。")
+                Text("暂未配置私网网段，建议保留默认局域网网段。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 10)
@@ -177,6 +250,8 @@ struct BypassRulesView: View {
                                 draftRules.cidrs.removeAll { $0 == cidr }
                             } label: {
                                 Image(systemName: "minus.circle")
+                                    .frame(width: 22, height: 22)
+                                    .contentShape(Rectangle())
                             }
                             .buttonStyle(.borderless)
                         }
@@ -199,6 +274,7 @@ struct BypassRulesView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                .allowsHitTesting(false)
         )
     }
 
@@ -232,6 +308,8 @@ struct BypassRulesView: View {
                                 Image(systemName: "xmark.circle.fill")
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
+                                    .frame(width: 16, height: 16)
+                                    .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                         }
@@ -254,27 +332,17 @@ struct BypassRulesView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                .allowsHitTesting(false)
         )
     }
 
     private var previewSection: some View {
-        DisclosureGroup("查看生成的环境变量预览", isExpanded: $showPreview) {
+        CollapsibleCard(title: "查看生成的环境变量", isExpanded: $showPreview) {
             VStack(alignment: .leading, spacing: 12) {
                 previewBlock(title: "NO_PROXY", value: draftRules.noProxyCSV())
                 previewBlock(title: "Chromium --proxy-bypass-list", value: draftRules.chromiumBypassList())
             }
-            .padding(.top, 10)
         }
-        .font(.subheadline.weight(.medium))
-        .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
-        )
     }
 
     private func previewBlock(title: String, value: String) -> some View {
@@ -310,7 +378,7 @@ struct BypassRulesView: View {
 
     private var unsavedChangesBar: some View {
         HStack(spacing: 10) {
-            StatusDotLabel(text: "白名单有未保存的更改", color: .orange, emphasized: true)
+            StatusDotLabel(text: "有未保存的更改", color: .orange, emphasized: true)
             Spacer()
             Button("还原") {
                 draftRules = appState.config.bypassRules
@@ -320,7 +388,9 @@ struct BypassRulesView: View {
             .buttonStyle(.bordered)
             Button("保存并应用") {
                 var cfg = appState.config
-                cfg.bypassRules = draftRules
+                var merged = draftRules
+                merged.blockTelemetry = cfg.bypassRules.blockTelemetry
+                cfg.bypassRules = merged
                 Task { await appState.saveConfig(cfg, triggerSync: true) }
             }
             .buttonStyle(.borderedProminent)
@@ -335,6 +405,7 @@ struct BypassRulesView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(Color.orange.opacity(0.28), lineWidth: 1)
+                .allowsHitTesting(false)
         )
     }
 

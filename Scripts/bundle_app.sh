@@ -11,7 +11,22 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 OUTPUT_DIR="${PINGATE_APP_DIR:-/Applications}"
 CLI_INSTALL_DIR="${HOME}/.local/bin"
 SKIP_CLI=false
-APP_VERSION="1.0.0"
+
+resolve_default_version() {
+    if [[ -n "${PINGATE_VERSION:-}" ]]; then
+        printf '%s' "${PINGATE_VERSION#v}"
+        return
+    fi
+    local git_tag
+    git_tag="$(git -C "${REPO_ROOT}" describe --tags --abbrev=0 2>/dev/null || true)"
+    if [[ -n "${git_tag}" ]]; then
+        printf '%s' "${git_tag#v}"
+        return
+    fi
+    printf '%s' "0.1.0"
+}
+
+APP_VERSION="$(resolve_default_version)"
 BUILD_NUMBER="1"
 BUNDLE_ID="com.pingate.app"
 
@@ -23,7 +38,7 @@ Options:
   --output-dir <dir>    Directory to install PinGate.app (default: /Applications)
   --cli-dir <dir>       Directory to install pingate CLI (default: ~/.local/bin)
   --skip-cli            Do not install the pingate CLI binary
-  --version <semver>    CFBundleShortVersionString (default: 1.0.0)
+  --version <semver>    CFBundleShortVersionString (default: PINGATE_VERSION, latest git tag, or 0.1.0)
   -h, --help            Show this help message
 EOF
 }
@@ -43,7 +58,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --version)
-            APP_VERSION="$2"
+            APP_VERSION="${2#v}"
             shift 2
             ;;
         -h|--help)
@@ -245,13 +260,13 @@ iconutil -c icns "${ICONSET_DIR}" -o "${ICON_ICNS}"
 # Assemble PinGate.app in staging directory
 STAGED_APP="${WORK_DIR}/PinGate.app"
 mkdir -p "${STAGED_APP}/Contents/MacOS"
-mkdir -p "${STAGED_APP}/Contents/Resources"
+mkdir -p "${STAGED_APP}/Contents/Resources/bin"
 
 cp "${APP_BIN}" "${STAGED_APP}/Contents/MacOS/PinGateApp"
 chmod 0755 "${STAGED_APP}/Contents/MacOS/PinGateApp"
 
-cp "${CLI_BIN}" "${STAGED_APP}/Contents/Resources/pingate"
-chmod 0755 "${STAGED_APP}/Contents/Resources/pingate"
+cp "${CLI_BIN}" "${STAGED_APP}/Contents/Resources/bin/pingate"
+chmod 0755 "${STAGED_APP}/Contents/Resources/bin/pingate"
 
 cp "${ICON_ICNS}" "${STAGED_APP}/Contents/Resources/AppIcon.icns"
 

@@ -9,13 +9,13 @@ public enum HealthState: String, Codable, Sendable, Equatable, Hashable {
     public var displayName: String {
         switch self {
         case .protected:
-            return "已受保护"
+            return "保护中"
         case .warning:
-            return "存在提醒"
+            return "需注意"
         case .leaking:
             return "发现漏网"
         case .stopped:
-            return "已停止"
+            return "已关闭"
         }
     }
 }
@@ -29,13 +29,13 @@ public enum SocketClassification: String, Codable, Sendable, Equatable, Hashable
     public var displayName: String {
         switch self {
         case .proxied:
-            return "已走代理"
+            return "已代理"
         case .loopback:
-            return "本地回环"
+            return "本机连接"
         case .bypass:
-            return "内网直连"
+            return "直连"
         case .leak:
-            return "疑似漏网"
+            return "未走代理"
         }
     }
 }
@@ -93,13 +93,13 @@ public enum ProxyEnvStatus: String, Codable, Sendable, Equatable, Hashable {
     public var displayName: String {
         switch self {
         case .valid:
-            return "代理环境变量正常"
+            return "代理环境正常"
         case .missing:
-            return "缺少代理环境变量"
+            return "缺少代理配置"
         case .wrongPort:
             return "代理端口不匹配"
         case .unreadable:
-            return "环境变量不可读"
+            return "无法读取进程环境"
         }
     }
 }

@@ -17,12 +17,14 @@ final class AppState {
     private let exitProber: ExitIPProber
     private let interceptor: UserSpaceInterceptor
     private let inspector: DarwinProcessInspector
+    private let updater: AppUpdater
 
     // MARK: - Published Observable State
     var config: PinGateConfig
     var auditSnapshot: AuditSnapshot?
     var outletRunning: Bool = false
     var isTogglingOutlet: Bool = false
+    var isTogglingTelemetry: Bool = false
     var mihomoVersion: String?
     var exitProbe: ExitProbeResult?
     var isProbingExitIP: Bool = false
@@ -44,14 +46,26 @@ final class AppState {
     var t3SyncStatuses: [UUID: Bool] = [:]
     var discoveredFlClashProfiles: [URL] = []
     var launchAtLogin: Bool = false
-    var captureModeStatusMessage: String = "用户态托管模式运行中（应用启动注入 + CLI 包装 + T3 Code 同步 + 实时防漏审计）。"
+    var captureModeStatusMessage: String = "标准代理模式运行中（桌面应用注入 + 命令行工具 + T3 Code 同步 + 实时连接监控）。"
 
-    /// Requested dashboard tab navigation (e.g. from MenuBar leak alert "查看审计").
+    // MARK: - Auto-Update State
+    let currentAppVersion: SemanticVersion
+    var availableUpdate: ReleaseInfo?
+    var isCheckingUpdate: Bool = false
+    var isDownloadingUpdate: Bool = false
+    var updateProgress: UpdateProgress?
+    var preparedUpdate: PreparedUpdate?
+    var updateErrorMessage: String?
+    var lastUpdateCheckAt: Date?
+    var showUpdateSheet: Bool = false
+
+    /// Requested dashboard tab navigation (e.g. from MenuBar leak alert "查看详情").
     var requestedDashboardSection: DashboardSection?
 
     // MARK: - Internal Lifecycle
     private var hasBootstrapped = false
     private var pollTask: Task<Void, Never>?
+    private var updateCheckTask: Task<Void, Never>?
     private var bannerDismissTask: Task<Void, Never>?
     private var profileWatchers: [UUID: ProfileWatcher] = [:]
     private var previousHealthState: HealthState = .stopped
@@ -67,6 +81,8 @@ final class AppState {
         self.inspector = DarwinProcessInspector()
         self.leakAuditor = LeakAuditor(inspector: inspector)
         self.exitProber = ExitIPProber()
+        self.updater = AppUpdater(configStore: resolvedStore)
+        self.currentAppVersion = AppUpdater.currentAppVersion()
         self.interceptor = UserSpaceInterceptor(
             appLauncher: AppLauncher(inspector: inspector),
             shimManager: CLIShimManager(),
@@ -160,19 +176,6 @@ final class AppState {
         return outletRunning ? .protected : .stopped
     }
 
-    var shortProtectionStateLabel: String {
-        switch overallHealthState {
-        case .protected:
-            return "保护中"
-        case .warning:
-            return "有提醒"
-        case .leaking:
-            return "有漏网"
-        case .stopped:
-            return "已暂停"
-        }
-    }
-
     var menuBarSymbolName: String {
         switch overallHealthState {
         case .protected:
@@ -263,6 +266,7 @@ final class AppState {
         await refreshActiveConnections()
         if !isSnapshotRun {
             startPollingLoop()
+            startAutoUpdateLoop()
         }
     }
 
@@ -286,22 +290,158 @@ final class AppState {
         }
     }
 
+    private func startAutoUpdateLoop() {
+        updateCheckTask?.cancel()
+        updateCheckTask = Task { [weak self] in
+            // Initial delayed background check (5 seconds after startup)
+            try? await Task.sleep(for: .seconds(5))
+            while !Task.isCancelled {
+                guard let self else { return }
+                if self.config.autoCheckUpdates {
+                    await self.checkForUpdates(userInitiated: false)
+                }
+                // Check again every 6 hours
+                try? await Task.sleep(for: .seconds(6 * 3600))
+            }
+        }
+    }
+
+    // MARK: - Auto-Update Operations
+
+    func checkForUpdates(userInitiated: Bool) async {
+        guard !isCheckingUpdate else { return }
+        isCheckingUpdate = true
+        updateErrorMessage = nil
+        if userInitiated {
+            showStatusBanner("正在检查更新…", autoDismiss: false)
+        }
+        defer { isCheckingUpdate = false }
+
+        let proxyOutlet = outletRunning ? config.primaryOutlet() : nil
+        do {
+            let result = try await updater.checkForUpdates(
+                currentVersion: currentAppVersion,
+                proxyOutlet: proxyOutlet
+            )
+            lastUpdateCheckAt = Date()
+            switch result {
+            case .updateAvailable(_, let release):
+                availableUpdate = release
+                preparedUpdate = nil
+                updateProgress = nil
+                showStatusBanner("发现新版本 \(release.tagName)")
+                if userInitiated {
+                    showUpdateSheet = true
+                }
+            case .upToDate(_, _):
+                availableUpdate = nil
+                preparedUpdate = nil
+                if userInitiated {
+                    showStatusBanner("已是最新版本（\(currentAppVersion.tagString)）")
+                }
+            }
+        } catch {
+            if userInitiated {
+                updateErrorMessage = error.localizedDescription
+                lastSyncError = "检查更新失败：\(error.localizedDescription)"
+                statusBannerMessage = nil
+            }
+        }
+    }
+
+    func downloadAndVerifyUpdate() async {
+        guard let release = availableUpdate, !isDownloadingUpdate else { return }
+        isDownloadingUpdate = true
+        updateErrorMessage = nil
+        updateProgress = .checking
+        defer { isDownloadingUpdate = false }
+
+        let proxyOutlet = outletRunning ? config.primaryOutlet() : nil
+        do {
+            let prepared = try await updater.downloadAndVerify(
+                release: release,
+                proxyOutlet: proxyOutlet,
+                verifyCodeSign: true
+            ) { [weak self] progress in
+                Task { @MainActor [weak self] in
+                    self?.updateProgress = progress
+                }
+            }
+            preparedUpdate = prepared
+            updateProgress = .readyToInstall(stagedAppURL: prepared.stagedAppURL)
+        } catch {
+            updateErrorMessage = error.localizedDescription
+            updateProgress = nil
+        }
+    }
+
+    func applyPreparedUpdateAndRestart() {
+        guard let prepared = preparedUpdate else { return }
+        updateErrorMessage = nil
+        do {
+            let currentPID = Int32(ProcessInfo.processInfo.processIdentifier)
+            _ = try updater.scheduleSelfUpdate(
+                prepared: prepared,
+                waitForPID: currentPID,
+                relaunchApp: true
+            )
+            quitApp()
+        } catch {
+            updateErrorMessage = error.localizedDescription
+        }
+    }
+
+    func setAutoCheckUpdates(_ enabled: Bool) async {
+        var cfg = config
+        cfg.autoCheckUpdates = enabled
+        await saveConfig(cfg, triggerSync: false)
+    }
+
+    // MARK: - Telemetry Blocking (Instant Save + Hot Reload)
+
+    func setBlockTelemetry(_ enabled: Bool) async {
+        guard !isTogglingTelemetry else { return }
+        isTogglingTelemetry = true
+        defer { isTogglingTelemetry = false }
+        lastSyncError = nil
+
+        var cfg = config
+        cfg.blockTelemetry = enabled
+        do {
+            try configStore.save(cfg)
+            config = cfg
+            let snapshotURL = configStore.runtimeDirectory.appendingPathComponent("extension-policy.json")
+            try? interceptor.exportExtensionSnapshot(config: cfg).write(to: snapshotURL)
+
+            if let primary = cfg.primaryOutlet(), !primary.primaryNodeName.isEmpty {
+                _ = try await mihomoManager.syncAndRender(
+                    outlet: primary,
+                    bypassRules: cfg.bypassRules,
+                    hotReloadIfRunning: true
+                )
+            }
+            showStatusBanner(enabled ? "已开启遥测拦截并生效" : "已关闭遥测拦截并生效")
+        } catch {
+            lastSyncError = error.localizedDescription
+        }
+    }
+
     // MARK: - Outlet Lifecycle & Sync
 
     func startOutlet(_ outlet: OutletConfig? = nil) async {
         guard !isTogglingOutlet else { return }
         guard let targetOutlet = outlet ?? config.primaryOutlet() else {
-            lastSyncError = "尚未配置任何出口通道。"
+            lastSyncError = "尚未配置任何代理出口。"
             return
         }
         isTogglingOutlet = true
         defer { isTogglingOutlet = false }
         lastSyncError = nil
-        showStatusBanner("正在开启固定出口保护…", autoDismiss: false)
+        showStatusBanner("正在开启代理保护…", autoDismiss: false)
         do {
             try await mihomoManager.start(outlet: targetOutlet, bypassRules: config.bypassRules)
             await refreshOutletRuntimeStatus(for: targetOutlet)
-            showStatusBanner("固定出口保护已开启（:\(String(targetOutlet.listenPort))）")
+            showStatusBanner("代理保护已开启（:\(String(targetOutlet.listenPort))）")
             await probeExitIP(outlet: targetOutlet)
             await refreshAudit()
             await refreshActiveConnections()
@@ -316,11 +456,11 @@ final class AppState {
         guard let targetOutlet = outlet ?? config.primaryOutlet() else { return }
         isTogglingOutlet = true
         defer { isTogglingOutlet = false }
-        showStatusBanner("正在暂停固定出口保护…", autoDismiss: false)
+        showStatusBanner("正在关闭代理保护…", autoDismiss: false)
         await mihomoManager.stop(outletID: targetOutlet.id)
         await refreshOutletRuntimeStatus(for: targetOutlet)
         activeConnections = []
-        showStatusBanner("固定出口保护已暂停")
+        showStatusBanner("代理保护已关闭")
         await refreshAudit()
     }
 
@@ -330,11 +470,11 @@ final class AppState {
         isTogglingOutlet = true
         defer { isTogglingOutlet = false }
         lastSyncError = nil
-        showStatusBanner("正在重启固定出口通道…", autoDismiss: false)
+        showStatusBanner("正在重启代理出口…", autoDismiss: false)
         do {
             try await mihomoManager.restart(outlet: targetOutlet, bypassRules: config.bypassRules)
             await refreshOutletRuntimeStatus(for: targetOutlet)
-            showStatusBanner("固定出口通道已重启")
+            showStatusBanner("代理出口已重启")
             await probeExitIP(outlet: targetOutlet)
             await refreshAudit()
             await refreshActiveConnections()
@@ -361,8 +501,8 @@ final class AppState {
             lastSyncResult = result
             showStatusBanner(
                 result.reloadedLive
-                    ? "已同步并热重载（\(result.extractedProxyNames.count) 个节点）"
-                    : "已同步配置（\(result.extractedProxyNames.count) 个节点）"
+                    ? "已同步节点并生效（\(result.extractedProxyNames.count) 个节点）"
+                    : "已同步节点（\(result.extractedProxyNames.count) 个节点）"
             )
             await refreshOutletRuntimeStatus(for: targetOutlet)
             if outletRunning {
@@ -421,7 +561,7 @@ final class AppState {
             let result = try await exitProber.probe(outlet: targetOutlet)
             exitProbe = result
         } catch {
-            showStatusBanner("出口 IP 探测失败：\(error.localizedDescription)")
+            showStatusBanner("出口 IP 检测失败：\(error.localizedDescription)")
         }
     }
 
@@ -515,7 +655,7 @@ final class AppState {
             discoveredFlClashProfiles = ConfigStore.discoverFlClashProfiles()
             configureProfileWatchers()
             refreshTargetStatuses()
-            showStatusBanner("配置已安全保存")
+            showStatusBanner("配置已保存")
 
             let snapshotURL = configStore.runtimeDirectory.appendingPathComponent("extension-policy.json")
             let extSnapshot = interceptor.exportExtensionSnapshot(config: newConfig)
@@ -583,7 +723,7 @@ final class AppState {
         guard let outlet = config.outlet(id: target.outletID) ?? config.primaryOutlet() else { return }
         busyTargetIDs.insert(target.id)
         defer { busyTargetIDs.remove(target.id) }
-        showStatusBanner("正在通过出口 :\(String(outlet.listenPort)) 重启 \(target.name)…", autoDismiss: false)
+        showStatusBanner("正在重启「\(target.name)」并走代理…", autoDismiss: false)
         do {
             let outcome = try await interceptor.launchTarget(
                 target,
@@ -602,15 +742,15 @@ final class AppState {
     private func handleLaunchOutcome(_ outcome: AppLaunchOutcome) {
         switch outcome {
         case .launched(_, let name, let port):
-            showStatusBanner("已启动 \(name)，固定至出口 :\(String(port))")
+            showStatusBanner("已启动 \(name) 并走代理（:\(String(port))）")
         case .activatedExisting(_, let name):
-            showStatusBanner("已切换到受保护的 \(name)")
-        case .runningWithoutProxy(_, let name, let port):
-            showStatusBanner("\(name) 未走出口 :\(String(port))，请点击「用代理重启」")
+            showStatusBanner("已切换到 \(name)")
+        case .runningWithoutProxy(_, let name, _):
+            showStatusBanner("\(name) 当前未走代理，请点击「重启并走代理」")
         case .restartedWithProxy(_, _, let name, let port):
-            showStatusBanner("已通过出口 :\(String(port)) 重启 \(name)")
+            showStatusBanner("已重启 \(name) 并走代理（:\(String(port))）")
         case .blockedPortClosed(let host, let port, let name):
-            lastSyncError = "本地出口 \(host):\(String(port)) 未运行，已阻止启动 \(name) 以防直连漏网。"
+            lastSyncError = "本地代理 \(host):\(String(port)) 未运行，已阻止启动 \(name) 以避免直连。"
         }
     }
 
@@ -625,7 +765,7 @@ final class AppState {
                 outlet: outlet,
                 bypassRules: config.bypassRules
             )
-            showStatusBanner("已安装 CLI 包装：\(Self.shortenedPath(url.path))")
+            showStatusBanner("已安装命令：\(Self.shortenedPath(url.path))")
             refreshTargetStatuses()
         } catch {
             lastSyncError = error.localizedDescription
@@ -639,7 +779,7 @@ final class AppState {
         defer { busyTargetIDs.remove(target.id) }
         do {
             _ = try interceptor.shimManager.removeShim(commandName: cmd)
-            showStatusBanner("已移除 CLI 包装：\(cmd)")
+            showStatusBanner("已移除命令：\(cmd)")
             refreshTargetStatuses()
         } catch {
             lastSyncError = error.localizedDescription
@@ -684,9 +824,9 @@ final class AppState {
         }
         if addedCount > 0 {
             await saveConfig(cfg, triggerSync: false)
-            showStatusBanner("已添加模板「\(template.name)」（新增 \(addedCount) 项）")
+            showStatusBanner("已添加「\(template.name)」（新增 \(addedCount) 项）")
         } else {
-            showStatusBanner("模板「\(template.name)」中的所有目标已存在")
+            showStatusBanner("「\(template.name)」中的所有项目都已添加")
         }
     }
 
@@ -761,7 +901,7 @@ final class AppState {
     private func sendLeakNotification(summary: String) {
         guard isBundledApp else { return }
         let content = UNMutableNotificationContent()
-        content.title = "PinGate 防漏告警"
+        content.title = "PinGate 直连提醒"
         content.body = summary
         content.sound = .default
         let request = UNNotificationRequest(
@@ -777,6 +917,8 @@ final class AppState {
     func quitApp() {
         pollTask?.cancel()
         pollTask = nil
+        updateCheckTask?.cancel()
+        updateCheckTask = nil
         bannerDismissTask?.cancel()
         bannerDismissTask = nil
         for watcher in profileWatchers.values {
@@ -791,6 +933,68 @@ final class AppState {
 }
 
 // MARK: - Shared UI Components
+
+/// Full-row clickable collapsible card replacing macOS `DisclosureGroup` (which only reacts to its 8px chevron).
+struct CollapsibleCard<Content: View>: View {
+    let title: String
+    @Binding var isExpanded: Bool
+    var compact: Bool = false
+    @ViewBuilder let content: () -> Content
+
+    @State private var isHoveringHeader = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                        .frame(width: 12)
+                    Text(title)
+                        .font(compact ? .caption.weight(.medium) : .subheadline.weight(.medium))
+                        .foregroundStyle(.primary)
+                    Spacer()
+                }
+                .padding(.horizontal, compact ? 10 : 14)
+                .padding(.vertical, compact ? 8 : 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: compact ? 7 : 10, style: .continuous)
+                        .fill(isHoveringHeader ? Color.primary.opacity(0.05) : Color.clear)
+                )
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { hovering in
+                isHoveringHeader = hovering
+            }
+
+            if isExpanded {
+                Divider()
+                    .padding(.horizontal, compact ? 10 : 14)
+                content()
+                    .padding(.horizontal, compact ? 10 : 14)
+                    .padding(.top, compact ? 8 : 12)
+                    .padding(.bottom, compact ? 10 : 14)
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: compact ? 8 : 10, style: .continuous)
+                .fill(compact ? Color.primary.opacity(0.03) : Color(nsColor: .controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: compact ? 8 : 10, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                .allowsHitTesting(false)
+        )
+    }
+}
 
 /// Displays a real macOS application bundle icon when available, falling back to an SF Symbol.
 struct TargetIconView: View {
@@ -854,10 +1058,13 @@ struct StatusDotLabel: View {
     }
 }
 
-/// Unified protection master switch with confirmation guard when pausing active traffic.
+/// Unified protection master switch.
+/// Uses native `.alert` in standard windows, or calls `onRequestConfirmPause` inside MenuBarExtra popovers
+/// where system confirmation dialogs can dismiss the popover.
 struct ProtectionMasterSwitch: View {
     @Bindable var appState: AppState
-    @State private var showPauseConfirm = false
+    var onRequestConfirmPause: (() -> Void)? = nil
+    @State private var showPauseAlert = false
 
     var body: some View {
         HStack(spacing: 6) {
@@ -866,14 +1073,18 @@ struct ProtectionMasterSwitch: View {
                     .controlSize(.small)
             }
             Toggle(
-                "固定出口保护总开关",
+                "代理保护总开关",
                 isOn: Binding(
                     get: { appState.outletRunning },
                     set: { wantOn in
                         if wantOn {
                             Task { await appState.startOutlet() }
                         } else if appState.hasActiveProtectedTraffic {
-                            showPauseConfirm = true
+                            if let onRequestConfirmPause {
+                                onRequestConfirmPause()
+                            } else {
+                                showPauseAlert = true
+                            }
                         } else {
                             Task { await appState.stopOutlet() }
                         }
@@ -885,21 +1096,17 @@ struct ProtectionMasterSwitch: View {
             .tint(.green)
             .controlSize(.small)
             .disabled(appState.isTogglingOutlet)
-            .help(appState.outletRunning ? "暂停固定出口保护" : "开启固定出口保护")
+            .help(appState.outletRunning ? "关闭代理保护" : "开启代理保护")
         }
-        .confirmationDialog(
-            "确定要暂停固定出口保护吗？",
-            isPresented: $showPauseConfirm,
-            titleVisibility: .visible
-        ) {
-            Button("仍要暂停", role: .destructive) {
+        .alert("确定要关闭代理保护吗？", isPresented: $showPauseAlert) {
+            Button("仍要关闭", role: .destructive) {
                 Task { await appState.stopOutlet() }
             }
             Button("取消", role: .cancel) {}
         } message: {
             let procs = appState.activeProtectedProcessCount
             let socks = appState.auditSnapshot?.totalProxiedSockets ?? 0
-            Text("当前有 \(String(procs)) 个受保护进程（\(String(socks)) 条代理连接）正在使用固定出口，暂停后将立即中断其代理连接。")
+            Text("当前有 \(String(procs)) 个应用进程（\(String(socks)) 条代理连接）正在使用代理，关闭后会立即中断它们的网络连接。")
         }
     }
 }

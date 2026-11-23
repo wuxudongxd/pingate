@@ -7,9 +7,9 @@ public enum CaptureMode: String, Codable, Sendable, CaseIterable, Hashable {
     public var displayName: String {
         switch self {
         case .userSpace:
-            return "用户态托管模式（阶段 1–2）"
+            return "标准代理模式"
         case .systemExtension:
-            return "系统扩展透明代理（阶段 3）"
+            return "系统扩展模式（透明代理）"
         }
     }
 }
@@ -118,9 +118,9 @@ public enum TargetKind: String, Codable, Sendable, CaseIterable, Hashable {
         case .guiApp:
             return "桌面应用"
         case .cliTool:
-            return "CLI 命令封装"
+            return "命令行工具"
         case .t3Integration:
-            return "T3 Code 配置同步"
+            return "T3 Code 集成"
         }
     }
 }
@@ -195,15 +195,33 @@ public struct BypassRules: Codable, Sendable, Equatable, Hashable {
     public var domains: [String]
     public var cidrs: [String]
     public var extraNoProxyEntries: [String]
+    public var blockTelemetry: Bool
 
     public init(
         domains: [String] = BypassRules.defaultBypassDomains,
         cidrs: [String] = BypassRules.defaultPrivateCIDRs,
-        extraNoProxyEntries: [String] = BypassRules.defaultNoProxyEntries
+        extraNoProxyEntries: [String] = BypassRules.defaultNoProxyEntries,
+        blockTelemetry: Bool = true
     ) {
         self.domains = domains
         self.cidrs = cidrs
         self.extraNoProxyEntries = extraNoProxyEntries
+        self.blockTelemetry = blockTelemetry
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case domains
+        case cidrs
+        case extraNoProxyEntries
+        case blockTelemetry
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.domains = try container.decodeIfPresent([String].self, forKey: .domains) ?? Self.defaultBypassDomains
+        self.cidrs = try container.decodeIfPresent([String].self, forKey: .cidrs) ?? Self.defaultPrivateCIDRs
+        self.extraNoProxyEntries = try container.decodeIfPresent([String].self, forKey: .extraNoProxyEntries) ?? Self.defaultNoProxyEntries
+        self.blockTelemetry = try container.decodeIfPresent(Bool.self, forKey: .blockTelemetry) ?? true
     }
 
     /// Generates a deduplicated comma-separated NO_PROXY value combining loopback, corporate domains, and private CIDRs.
@@ -314,6 +332,7 @@ public struct PinGateConfig: Codable, Sendable, Equatable {
     public var bypassRules: BypassRules
     public var auditPolicy: AuditPolicy
     public var captureMode: CaptureMode
+    public var autoCheckUpdates: Bool
 
     public init(
         schemaVersion: Int = PinGateConfig.currentSchemaVersion,
@@ -321,7 +340,8 @@ public struct PinGateConfig: Codable, Sendable, Equatable {
         targets: [ManagedTarget],
         bypassRules: BypassRules = BypassRules(),
         auditPolicy: AuditPolicy = AuditPolicy(),
-        captureMode: CaptureMode = .userSpace
+        captureMode: CaptureMode = .userSpace,
+        autoCheckUpdates: Bool = true
     ) {
         self.schemaVersion = schemaVersion
         self.outlets = outlets
@@ -329,6 +349,33 @@ public struct PinGateConfig: Codable, Sendable, Equatable {
         self.bypassRules = bypassRules
         self.auditPolicy = auditPolicy
         self.captureMode = captureMode
+        self.autoCheckUpdates = autoCheckUpdates
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case outlets
+        case targets
+        case bypassRules
+        case auditPolicy
+        case captureMode
+        case autoCheckUpdates
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        self.outlets = try container.decode([OutletConfig].self, forKey: .outlets)
+        self.targets = try container.decode([ManagedTarget].self, forKey: .targets)
+        self.bypassRules = try container.decodeIfPresent(BypassRules.self, forKey: .bypassRules) ?? BypassRules()
+        self.auditPolicy = try container.decodeIfPresent(AuditPolicy.self, forKey: .auditPolicy) ?? AuditPolicy()
+        self.captureMode = try container.decodeIfPresent(CaptureMode.self, forKey: .captureMode) ?? .userSpace
+        self.autoCheckUpdates = try container.decodeIfPresent(Bool.self, forKey: .autoCheckUpdates) ?? true
+    }
+
+    public var blockTelemetry: Bool {
+        get { bypassRules.blockTelemetry }
+        set { bypassRules.blockTelemetry = newValue }
     }
 
     public func outlet(id: UUID) -> OutletConfig? {

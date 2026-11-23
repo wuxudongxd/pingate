@@ -7,7 +7,7 @@ public enum ExitProbeError: Error, LocalizedError, Sendable {
     public var errorDescription: String? {
         switch self {
         case .allProbesFailed(let errors):
-            return "所有出口 IP 探针均失败：\(errors.joined(separator: "；"))"
+            return "出口 IP 检测失败：\(errors.joined(separator: "；"))"
         case .invalidProxyConfiguration(let detail):
             return "代理配置无效：\(detail)"
         }
@@ -138,7 +138,7 @@ public struct ExitIPProber: Sendable {
             throw NSError(
                 domain: "PinGate.ExitIPProber",
                 code: -2,
-                userInfo: [NSLocalizedDescriptionKey: "无法解析探针响应内容"]
+                userInfo: [NSLocalizedDescriptionKey: "无法解析检测结果"]
             )
         }
         return parsed

@@ -258,7 +258,7 @@ public actor MihomoProcessManager {
 
         guard ready else {
             await stop(outletID: outletID)
-            throw MihomoProcessError.startupFailed("控制器 \(outlet.controllerAddress) 在超时时间内未能就绪。")
+            throw MihomoProcessError.startupFailed("代理引擎接口 \(outlet.controllerAddress) 在超时时间内未能就绪。")
         }
 
         if var inst = instances[outletID] {

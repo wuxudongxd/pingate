@@ -9,13 +9,13 @@ public enum MihomoAPIError: Error, LocalizedError, Sendable {
     public var errorDescription: String? {
         switch self {
         case .invalidURL(let path):
-            return "mihomo 控制器请求路径无效：\(path)"
+            return "代理引擎接口请求路径无效：\(path)"
         case .transportError(let detail):
-            return "连接 mihomo 控制器失败：\(detail)"
+            return "连接代理引擎接口失败：\(detail)"
         case .httpError(let statusCode, let body):
-            return "mihomo 控制器返回 HTTP \(statusCode)：\(body)"
+            return "代理引擎接口返回 HTTP \(statusCode)：\(body)"
         case .decodingError(let detail):
-            return "解析 mihomo 控制器响应失败：\(detail)"
+            return "解析代理引擎接口响应失败：\(detail)"
         }
     }
 }

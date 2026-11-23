@@ -2,16 +2,25 @@ import AppKit
 import PinGateCore
 import SwiftUI
 
+private enum MenuBarPendingConfirm: Equatable {
+    case pauseProtection
+    case quitApp
+    case restartTarget(ManagedTarget)
+}
+
 struct MenuBarView: View {
     @Bindable var appState: AppState
     @Environment(\.openWindow) private var openWindow
 
-    @State private var showQuitConfirm = false
-    @State private var targetPendingRestart: ManagedTarget?
+    @State private var pendingConfirm: MenuBarPendingConfirm?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             masterHeaderSection
+
+            if let confirm = pendingConfirm {
+                inlineConfirmationCard(for: confirm)
+            }
 
             if let leakCount = appState.auditSnapshot?.totalLeakSockets, leakCount > 0 {
                 leakAlertStrip(leakCount: leakCount)
@@ -33,6 +42,8 @@ struct MenuBarView: View {
                         Image(systemName: "xmark")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
+                            .frame(width: 20, height: 20)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }
@@ -58,39 +69,6 @@ struct MenuBarView: View {
         .frame(width: 340)
         .task {
             await appState.bootstrapIfNeeded()
-        }
-        .confirmationDialog(
-            "确定要退出 PinGate 吗？",
-            isPresented: $showQuitConfirm,
-            titleVisibility: .visible
-        ) {
-            Button("停止并退出", role: .destructive) {
-                appState.quitApp()
-            }
-            Button("取消", role: .cancel) {}
-        } message: {
-            let procs = appState.activeProtectedProcessCount
-            Text("当前有 \(String(procs)) 个受保护进程正在使用固定出口，退出将停止本地代理并中断其连接。")
-        }
-        .confirmationDialog(
-            "确定要使用代理重启 \(targetPendingRestart?.name ?? "") 吗？",
-            isPresented: Binding(
-                get: { targetPendingRestart != nil },
-                set: { if !$0 { targetPendingRestart = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("重启并接管", role: .destructive) {
-                if let target = targetPendingRestart {
-                    targetPendingRestart = nil
-                    Task { await appState.restartTargetWithProxy(target: target) }
-                }
-            }
-            Button("取消", role: .cancel) {
-                targetPendingRestart = nil
-            }
-        } message: {
-            Text("这将关闭当前未走代理的应用实例，并通过固定出口重新启动。")
         }
     }
 
@@ -118,7 +96,11 @@ struct MenuBarView: View {
 
             Spacer()
 
-            ProtectionMasterSwitch(appState: appState)
+            ProtectionMasterSwitch(appState: appState) {
+                withAnimation(.easeInOut(duration: 0.16)) {
+                    pendingConfirm = .pauseProtection
+                }
+            }
         }
     }
 
@@ -127,36 +109,108 @@ struct MenuBarView: View {
         case .leaking:
             let leaks = appState.auditSnapshot?.totalLeakSockets ?? 0
             if leaks > 0 {
-                return "发现 \(String(leaks)) 处漏网"
+                return "发现 \(String(leaks)) 条未走代理的连接"
             }
             return "检测到应用未走代理"
         case .stopped:
-            return "保护已暂停"
+            return "已关闭"
         case .warning:
-            return "存在状态提醒"
+            return "需注意"
         case .protected:
             if let probe = appState.exitProbe {
                 if let country = probe.country, !country.isEmpty {
-                    return "已保护 · \(country) \(probe.ip)"
+                    return "保护中 · \(country) \(probe.ip)"
                 }
-                return "已保护 · \(probe.ip)"
+                return "保护中 · \(probe.ip)"
             }
             if let outlet = appState.config.primaryOutlet() {
-                return "已保护 · :\(String(outlet.listenPort))"
+                return "保护中 · :\(String(outlet.listenPort))"
             }
-            return "已保护"
+            return "保护中"
         }
+    }
+
+    // MARK: - Inline Popover Confirmation Banner (100% reliable inside MenuBarExtra)
+
+    private func inlineConfirmationCard(for confirm: MenuBarPendingConfirm) -> some View {
+        let title: String
+        let detail: String
+        let destructiveLabel: String
+
+        switch confirm {
+        case .pauseProtection:
+            let procs = appState.activeProtectedProcessCount
+            let socks = appState.auditSnapshot?.totalProxiedSockets ?? 0
+            title = "确定要关闭代理保护吗？"
+            detail = "当前有 \(String(procs)) 个应用进程（\(String(socks)) 条代理连接）正在使用代理，关闭后会立即中断它们的网络连接。"
+            destructiveLabel = "仍要关闭"
+        case .quitApp:
+            let procs = appState.activeProtectedProcessCount
+            title = "确定要退出 PinGate 吗？"
+            detail = "当前有 \(String(procs)) 个应用进程正在使用代理，退出后会停止本地代理并中断连接。"
+            destructiveLabel = "停止并退出"
+        case .restartTarget(let target):
+            title = "重启「\(target.name)」并走代理？"
+            detail = "将关闭当前未走代理的实例，并通过代理重新启动。"
+            destructiveLabel = "重启并走代理"
+        }
+
+        return VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.primary)
+            Text(detail)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Spacer()
+                Button("取消") {
+                    withAnimation(.easeInOut(duration: 0.16)) {
+                        pendingConfirm = nil
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+
+                Button(destructiveLabel, role: .destructive) {
+                    let action = confirm
+                    pendingConfirm = nil
+                    switch action {
+                    case .pauseProtection:
+                        Task { await appState.stopOutlet() }
+                    case .quitApp:
+                        appState.quitApp()
+                    case .restartTarget(let target):
+                        Task { await appState.restartTargetWithProxy(target: target) }
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .controlSize(.mini)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.red.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.red.opacity(0.28), lineWidth: 1)
+                .allowsHitTesting(false)
+        )
     }
 
     private func leakAlertStrip(leakCount: Int) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "exclamationmark.octagon.fill")
                 .foregroundStyle(.red)
-            Text("检测到 \(String(leakCount)) 条直连漏网")
+            Text("发现 \(String(leakCount)) 条未走代理的连接")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.red)
             Spacer()
-            Button("查看审计") {
+            Button("查看详情") {
                 openDashboard(to: .audit)
             }
             .buttonStyle(.borderedProminent)
@@ -172,6 +226,7 @@ struct MenuBarView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(Color.red.opacity(0.28), lineWidth: 1)
+                .allowsHitTesting(false)
         )
     }
 
@@ -182,7 +237,7 @@ struct MenuBarView: View {
             HStack(spacing: 8) {
                 let nodes = appState.quickSelectableNodes
                 Picker(
-                    "出口节点",
+                    "代理节点",
                     selection: Binding(
                         get: { appState.activeMihomoNode ?? appState.config.primaryOutlet()?.primaryNodeName ?? "" },
                         set: { newNode in
@@ -192,7 +247,7 @@ struct MenuBarView: View {
                     )
                 ) {
                     if nodes.isEmpty {
-                        Text("暂无已同步节点").tag("")
+                        Text("暂无可用节点").tag("")
                     } else {
                         ForEach(nodes, id: \.self) { node in
                             Text(node).tag(node)
@@ -216,7 +271,7 @@ struct MenuBarView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-                .help("立即同步订阅节点")
+                .help("从订阅源同步最新节点并生效")
                 .disabled(appState.isSyncing)
             }
 
@@ -226,7 +281,7 @@ struct MenuBarView: View {
                         .font(.caption2.monospaced())
                         .foregroundStyle(.secondary)
                 } else if appState.isProbingExitIP {
-                    Text("正在探测出口 IP…")
+                    Text("正在检测出口 IP…")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -243,8 +298,11 @@ struct MenuBarView: View {
                     Button {
                         Task { await appState.probeExitIP() }
                     } label: {
-                        Text(appState.isProbingExitIP ? "探测中…" : "探测 IP")
+                        Text(appState.isProbingExitIP ? "检测中…" : "测出口 IP")
                             .font(.caption2)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 2)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
@@ -260,7 +318,7 @@ struct MenuBarView: View {
         let targets = appState.enabledTargets
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("受保护应用")
+                Text("代理应用")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -272,7 +330,7 @@ struct MenuBarView: View {
             }
 
             if targets.isEmpty {
-                Text("暂无已启用的纳管目标。")
+                Text("暂未启用任何代理应用。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 6)
@@ -331,6 +389,7 @@ struct MenuBarView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(isLeaking ? Color.red.opacity(0.32) : Color.primary.opacity(0.06), lineWidth: 1)
+                .allowsHitTesting(false)
         )
         .contextMenu {
             targetContextMenu(for: target)
@@ -345,13 +404,13 @@ struct MenuBarView: View {
         proxiedCount: Int
     ) -> some View {
         if isLeaking {
-            StatusDotLabel(text: "未走固定出口代理", color: .red, emphasized: true)
+            StatusDotLabel(text: "未走代理", color: .red, emphasized: true)
         } else {
             switch target.kind {
             case .guiApp:
                 if isRunning {
                     StatusDotLabel(
-                        text: proxiedCount > 0 ? "运行中 · \(String(proxiedCount)) 条代理" : "运行中 · 已保护",
+                        text: proxiedCount > 0 ? "运行中 · \(String(proxiedCount)) 条连接" : "运行中 · 保护中",
                         color: .green
                     )
                 } else {
@@ -360,13 +419,13 @@ struct MenuBarView: View {
             case .cliTool:
                 let installed = appState.cliShimStatuses[target.id] ?? false
                 StatusDotLabel(
-                    text: installed ? "命令已就绪" : "尚未安装包装",
+                    text: installed ? "命令已就绪" : "未安装命令",
                     color: installed ? .green : .orange
                 )
             case .t3Integration:
                 let synced = appState.t3SyncStatuses[target.id] ?? false
                 StatusDotLabel(
-                    text: synced ? "配置已同步" : "待同步配置",
+                    text: synced ? "配置已同步" : "待同步",
                     color: synced ? .green : .orange
                 )
             }
@@ -378,8 +437,10 @@ struct MenuBarView: View {
         switch target.kind {
         case .guiApp:
             if isLeaking {
-                Button("用代理重启") {
-                    targetPendingRestart = target
+                Button("重启并走代理") {
+                    withAnimation(.easeInOut(duration: 0.16)) {
+                        pendingConfirm = .restartTarget(target)
+                    }
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.red)
@@ -419,11 +480,13 @@ struct MenuBarView: View {
             Button("打开") {
                 Task { await appState.launchOrActivate(target: target) }
             }
-            Button("用代理重启…") {
-                targetPendingRestart = target
+            Button("重启并走代理…") {
+                withAnimation(.easeInOut(duration: 0.16)) {
+                    pendingConfirm = .restartTarget(target)
+                }
             }
         case .cliTool:
-            Button("重新安装 CLI 包装") {
+            Button("重新安装命令") {
                 Task { await appState.installCLIShim(for: target) }
             }
         case .t3Integration:
@@ -433,7 +496,7 @@ struct MenuBarView: View {
         }
     }
 
-    // MARK: - Footer (Aligned Full-Width Toggle + Calm Actions)
+    // MARK: - Footer (Aligned Full-Width Toggle + Optional Update Row + Calm Actions)
 
     private var footerSection: some View {
         VStack(spacing: 10) {
@@ -454,6 +517,29 @@ struct MenuBarView: View {
                 .controlSize(.small)
             }
 
+            if let release = appState.availableUpdate {
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(Color.accentColor)
+                        .frame(width: 6, height: 6)
+                    Text("发现新版本 \(release.tagName)")
+                        .font(.caption.weight(.medium))
+                    Spacer()
+                    Button("立即更新") {
+                        appState.showUpdateSheet = true
+                        openDashboard(to: nil)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.mini)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(Color.accentColor.opacity(0.10))
+                )
+            }
+
             HStack {
                 Button {
                     openDashboard(to: nil)
@@ -467,7 +553,9 @@ struct MenuBarView: View {
 
                 Button("退出 PinGate") {
                     if appState.outletRunning && appState.hasActiveProtectedTraffic {
-                        showQuitConfirm = true
+                        withAnimation(.easeInOut(duration: 0.16)) {
+                            pendingConfirm = .quitApp
+                        }
                     } else {
                         appState.quitApp()
                     }

@@ -225,7 +225,7 @@ public struct UserSpaceInterceptor: TrafficInterceptor, Sendable {
 
         for target in config.targets where target.enabled {
             guard let outlet = config.outlet(id: target.outletID) ?? config.primaryOutlet() else {
-                warnings.append("目标「\(target.name)」未绑定有效出口通道。")
+                warnings.append("应用「\(target.name)」未绑定有效代理出口。")
                 continue
             }
 
@@ -239,7 +239,7 @@ public struct UserSpaceInterceptor: TrafficInterceptor, Sendable {
                     )
                     syncedShims.append(url.path)
                 } catch {
-                    warnings.append("CLI Shim「\(target.name)」已跳过：\(error.localizedDescription)")
+                    warnings.append("命令行工具「\(target.name)」已跳过：\(error.localizedDescription)")
                 }
 
             case .t3Integration:
@@ -302,7 +302,7 @@ public struct UserSpaceInterceptor: TrafficInterceptor, Sendable {
         InterceptorStatus(
             mode: .userSpace,
             isActive: true,
-            detail: "用户态托管模式已启用（NSWorkspace 代理启动器 + CLI Shim + T3 Code 同步 + libproc 实时防漏审计）。",
+            detail: "标准代理模式运行中（桌面应用注入 + 命令行工具 + T3 Code 同步 + 实时连接监控）。",
             extensionAvailable: false
         )
     }

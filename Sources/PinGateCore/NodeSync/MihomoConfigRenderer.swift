@@ -28,6 +28,36 @@ public struct MihomoConfigRenderer: Sendable {
 
     public static let outletGroupName = "OUTLET"
 
+    /// Built-in generic telemetry & auto-updater reporting domain suffixes blocked when `blockTelemetry` is enabled.
+    /// Carefully excludes authentication, model API, and static asset domains (`daily-cloudcode-pa.googleapis.com`,
+    /// `aicode.googleapis.com`, `www.googleapis.com`, `oauth2.googleapis.com`, `gstatic.com`, `lh3.googleusercontent.com`).
+    public static let builtInTelemetryDomainSuffixes: [String] = [
+        "play.googleapis.com",
+        "google-analytics.com",
+        "analytics.google.com",
+        "ssl-google-analytics.l.google.com",
+        "googletagmanager.com",
+        "www-googletagmanager.l.google.com",
+        "app-measurement.com",
+        "firebaselogging.googleapis.com",
+        "firebaseinstallations.googleapis.com",
+        "crashlyticsreports-pa.googleapis.com",
+        "sentry.io",
+        "optimizationguide-pa.googleapis.com",
+        "update.googleapis.com"
+    ]
+
+    /// Built-in wildcard patterns for telemetry / background auto-updater endpoints blocked when `blockTelemetry` is enabled.
+    public static let builtInTelemetryDomainWildcards: [String] = [
+        "antigravity-hub-auto-updater-*.us-central1.run.app"
+    ]
+
+    /// Full list of built-in Mihomo `REJECT` rules emitted when `bypassRules.blockTelemetry` is enabled.
+    public static var builtInTelemetryRules: [String] {
+        builtInTelemetryDomainSuffixes.map { "DOMAIN-SUFFIX,\($0),REJECT" }
+            + builtInTelemetryDomainWildcards.map { "DOMAIN-WILDCARD,\($0),REJECT" }
+    }
+
     public let domesticNameservers: [String]
     public let remoteDoHNameservers: [String]
 
@@ -72,12 +102,17 @@ public struct MihomoConfigRenderer: Sendable {
             rules.append("\(ruleType),\(cidr),DIRECT,no-resolve")
         }
 
-        // 2. Configured bypass domain suffixes BEFORE MATCH,OUTLET
+        // 2. Configured bypass domain suffixes BEFORE telemetry REJECT and MATCH,OUTLET
         for suffix in bypassRules.mihomoDomainSuffixes() {
             rules.append("DOMAIN-SUFFIX,\(suffix),DIRECT")
         }
 
-        // 3. Catch-all routed through the pinned OUTLET group
+        // 3. Built-in telemetry & auto-updater REJECT rules (after DIRECT, before MATCH,OUTLET)
+        if bypassRules.blockTelemetry {
+            rules.append(contentsOf: Self.builtInTelemetryRules)
+        }
+
+        // 4. Catch-all routed through the pinned OUTLET group
         rules.append("MATCH,\(Self.outletGroupName)")
 
         let dnsConfig: [String: Any] = [

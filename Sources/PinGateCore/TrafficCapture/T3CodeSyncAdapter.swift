@@ -12,7 +12,7 @@ public enum T3SyncError: Error, LocalizedError, Sendable, Equatable {
         case .invalidJSONStructure(let detail):
             return "T3 Code settings.json 结构无效：\(detail)。"
         case .providerNotFound(let key):
-            return "在 T3 Code settings.json 中未找到 Provider 实例「\(key)」。"
+            return "在 T3 Code settings.json 中未找到服务配置「\(key)」。"
         }
     }
 }

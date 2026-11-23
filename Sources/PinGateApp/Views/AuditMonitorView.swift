@@ -2,10 +2,10 @@ import PinGateCore
 import SwiftUI
 
 private enum ConnectionFilter: String, CaseIterable, Identifiable {
-    case key = "关键流量"
+    case key = "外部连接"
     case leaks = "仅漏网"
     case proxied = "已代理"
-    case bypass = "内网直连"
+    case bypass = "直连"
 
     var id: String { rawValue }
 }
@@ -62,15 +62,14 @@ struct AuditMonitorView: View {
             }
             .padding(22)
         }
-        .confirmationDialog(
-            "确定要使用代理重启 \(targetPendingRestart?.name ?? "") 吗？",
+        .alert(
+            "重启「\(targetPendingRestart?.name ?? "")」并走代理？",
             isPresented: Binding(
                 get: { targetPendingRestart != nil },
                 set: { if !$0 { targetPendingRestart = nil } }
-            ),
-            titleVisibility: .visible
+            )
         ) {
-            Button("重启并接管", role: .destructive) {
+            Button("重启并走代理", role: .destructive) {
                 if let target = targetPendingRestart {
                     targetPendingRestart = nil
                     Task { await appState.restartTargetWithProxy(target: target) }
@@ -80,14 +79,14 @@ struct AuditMonitorView: View {
                 targetPendingRestart = nil
             }
         } message: {
-            Text("将关闭当前未走代理的进程，并通过固定出口重新启动。")
+            Text("将关闭当前未走代理的实例，并通过代理重新启动。")
         }
     }
 
     private var headerRow: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("防漏审计")
+                Text("运行状态")
                     .font(.title2.bold())
                 Text("每 3 秒自动检查活跃连接")
                     .font(.subheadline)
@@ -114,7 +113,7 @@ struct AuditMonitorView: View {
             kpiCard(
                 title: "保护状态",
                 value: appState.overallHealthState.displayName,
-                subtitle: procCount > 0 ? "\(String(procCount)) 个受保护进程运行中" : "当前无活跃纳管进程",
+                subtitle: procCount > 0 ? "\(String(procCount)) 个应用进程运行中" : "当前无运行中的代理应用",
                 valueColor: appState.healthColor,
                 alertHighlight: appState.overallHealthState == .leaking
             )
@@ -123,16 +122,16 @@ struct AuditMonitorView: View {
                 title: "代理连接",
                 value: String(proxied),
                 subtitle: bypass > 0
-                    ? "命中出口 :\(portStr)，另有 \(String(bypass)) 条内网直连"
-                    : "已验证命中固定出口 :\(portStr)",
+                    ? "命中出口 :\(portStr)，另有 \(String(bypass)) 条直连"
+                    : "已走本地代理 :\(portStr)",
                 valueColor: .primary,
                 alertHighlight: false
             )
 
             kpiCard(
-                title: "漏网检测",
+                title: "直连检查",
                 value: leaks == 0 ? "0 漏网" : "\(String(leaks)) 处漏网",
-                subtitle: leaks == 0 ? "所有外网流量均已保护" : "请立即检查下方漏网记录",
+                subtitle: leaks == 0 ? "所有外网流量均已走代理" : "请检查下方未走代理的连接",
                 valueColor: leaks == 0 ? .green : .red,
                 alertHighlight: leaks > 0
             )
@@ -168,19 +167,20 @@ struct AuditMonitorView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(alertHighlight ? Color.red.opacity(0.32) : Color.primary.opacity(0.08), lineWidth: 1)
+                .allowsHitTesting(false)
         )
     }
 
     private var socketTableSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
-                Text("实时连接审计（\(String(visibleSockets.count))）")
+                Text("实时连接（\(String(visibleSockets.count))）")
                     .font(.headline)
 
                 Spacer()
 
                 if connectionFilter == .key || connectionFilter == .bypass {
-                    Toggle("显示本地回环（\(String(loopbackCount))）", isOn: $showLoopback)
+                    Toggle("显示本机连接（\(String(loopbackCount))）", isOn: $showLoopback)
                         .toggleStyle(.checkbox)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -193,7 +193,7 @@ struct AuditMonitorView: View {
                 }
                 .labelsHidden()
                 .pickerStyle(.segmented)
-                .frame(width: 280)
+                .frame(width: 268)
             }
 
             if visibleSockets.isEmpty {
@@ -211,6 +211,7 @@ struct AuditMonitorView: View {
                 .overlay(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                        .allowsHitTesting(false)
                 )
             } else {
                 VStack(spacing: 0) {
@@ -278,6 +279,7 @@ struct AuditMonitorView: View {
                 .overlay(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                        .allowsHitTesting(false)
                 )
             }
         }
@@ -286,15 +288,15 @@ struct AuditMonitorView: View {
     private var emptySocketsMessage: String {
         switch connectionFilter {
         case .leaks:
-            return "未检测到任何漏网连接。"
+            return "未发现未走代理的连接。"
         case .key:
             return loopbackCount > 0
-                ? "当前无外部代理或漏网连接（已隐藏 \(String(loopbackCount)) 条本地回环通信）。"
-                : "当前无活跃网络连接。"
+                ? "当前无外部连接（已隐藏 \(String(loopbackCount)) 条本机连接）。"
+                : "当前无活跃连接。"
         case .proxied:
-            return "当前暂无活跃的代理连接。"
+            return "当前暂无代理连接。"
         case .bypass:
-            return "当前无内网直连记录。"
+            return "当前无直连记录。"
         }
     }
 
@@ -305,7 +307,7 @@ struct AuditMonitorView: View {
                 .font(.headline)
 
             if processes.isEmpty {
-                Text("当前没有正在运行的纳管应用进程。")
+                Text("当前没有运行中的代理应用进程。")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .padding(14)
@@ -317,6 +319,7 @@ struct AuditMonitorView: View {
                     .overlay(
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                            .allowsHitTesting(false)
                     )
             } else {
                 VStack(spacing: 0) {
@@ -341,7 +344,7 @@ struct AuditMonitorView: View {
 
                             envStatusIndicator(proc.proxyEnvStatus)
 
-                            Text("\(String(proc.proxiedSocketCount)) 条代理")
+                            Text("\(String(proc.proxiedSocketCount)) 条连接")
                                 .font(.caption.monospaced())
                                 .foregroundStyle(.secondary)
                                 .frame(width: 68, alignment: .trailing)
@@ -350,7 +353,7 @@ struct AuditMonitorView: View {
                                let tid = proc.targetID,
                                let target = appState.config.targets.first(where: { $0.id == tid && $0.kind == .guiApp })
                             {
-                                Button("用代理重启") {
+                                Button("重启并走代理") {
                                     targetPendingRestart = target
                                 }
                                 .buttonStyle(.borderedProminent)
@@ -374,6 +377,7 @@ struct AuditMonitorView: View {
                 .overlay(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                        .allowsHitTesting(false)
                 )
             }
         }
@@ -382,7 +386,7 @@ struct AuditMonitorView: View {
     private var mihomoConnectionsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("mihomo 实时活跃连接（\(String(appState.activeConnections.count))）")
+                Text("活跃代理连接（\(String(appState.activeConnections.count))）")
                     .font(.headline)
                 Spacer()
                 Button("刷新") {
@@ -394,7 +398,7 @@ struct AuditMonitorView: View {
             }
 
             if !appState.outletRunning {
-                Text("开启固定出口保护后即可查看实时代理连接。")
+                Text("开启代理保护后即可查看实时连接。")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .padding(14)
@@ -406,9 +410,10 @@ struct AuditMonitorView: View {
                     .overlay(
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                            .allowsHitTesting(false)
                     )
             } else if appState.activeConnections.isEmpty {
-                Text("当前暂无经由 mihomo 的活跃连接。")
+                Text("当前暂无活跃代理连接。")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .padding(14)
@@ -420,6 +425,7 @@ struct AuditMonitorView: View {
                     .overlay(
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                            .allowsHitTesting(false)
                     )
             } else {
                 VStack(spacing: 0) {
@@ -476,48 +482,72 @@ struct AuditMonitorView: View {
                 .overlay(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                        .allowsHitTesting(false)
                 )
             }
         }
     }
 
     private var advancedEngineSection: some View {
-        DisclosureGroup("高级与引擎信息", isExpanded: $showEngineDetails) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
-                    Text("当前接管模式：")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    Text(appState.config.captureMode.displayName)
-                        .font(.caption)
+        CollapsibleCard(title: "引擎与高级信息", isExpanded: $showEngineDetails) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("自动检查更新")
+                            .font(.subheadline.weight(.medium))
+                        Text("当前版本 \(appState.currentAppVersion.tagString)，启动时与每 6 小时自动检查 GitHub Releases。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Toggle(
+                        "自动检查更新",
+                        isOn: Binding(
+                            get: { appState.config.autoCheckUpdates },
+                            set: { enabled in
+                                Task { await appState.setAutoCheckUpdates(enabled) }
+                            }
+                        )
+                    )
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+
+                    Button(appState.isCheckingUpdate ? "检查中…" : "检查更新") {
+                        Task { await appState.checkForUpdates(userInitiated: true) }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(appState.isCheckingUpdate)
                 }
-                Text(appState.captureModeStatusMessage)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text("已预留 macOS 系统扩展透明代理架构（NETransparentProxyProvider，非 TUN 模式，可与公司 VPN 无冲突共存），具备 Apple Developer ID 网络扩展签名后即可无缝升级。")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        Text("当前模式：")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Text(appState.config.captureMode.displayName)
+                            .font(.caption)
+                    }
+                    Text(appState.captureModeStatusMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("已预留 macOS 系统扩展透明代理支持（非 TUN 模式，可与公司 VPN 共存），具备 Apple Developer ID 网络扩展签名后即可启用。")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
-            .padding(.top, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .font(.subheadline.weight(.medium))
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
-        )
     }
 
     @ViewBuilder
     private func envStatusIndicator(_ status: ProxyEnvStatus) -> some View {
         switch status {
         case .valid:
-            StatusDotLabel(text: "环境正常", color: .green)
+            StatusDotLabel(text: status.displayName, color: .green)
         case .missing, .wrongPort:
             Text(status.displayName)
                 .font(.caption2.weight(.semibold))

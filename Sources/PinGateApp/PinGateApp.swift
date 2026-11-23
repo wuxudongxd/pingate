@@ -147,10 +147,10 @@ struct PinGateApp: App {
 }
 
 enum DashboardSection: String, CaseIterable, Identifiable {
-    case audit = "防漏审计"
-    case targets = "纳管目标"
-    case outlets = "出口通道"
-    case bypass = "直连白名单"
+    case audit = "运行状态"
+    case targets = "代理应用"
+    case outlets = "代理出口"
+    case bypass = "规则与隐私"
 
     var id: String { rawValue }
 
@@ -163,7 +163,7 @@ enum DashboardSection: String, CaseIterable, Identifiable {
         case .outlets:
             return "network"
         case .bypass:
-            return "arrow.triangle.branch"
+            return "hand.raised"
         }
     }
 }
@@ -184,6 +184,9 @@ struct DashboardView: View {
             .background(Color(nsColor: .windowBackgroundColor))
         }
         .navigationSplitViewStyle(.balanced)
+        .sheet(isPresented: $appState.showUpdateSheet) {
+            UpdateSheetView(appState: appState)
+        }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
@@ -196,10 +199,10 @@ struct DashboardView: View {
                         } else {
                             Image(systemName: "arrow.triangle.2.circlepath")
                         }
-                        Text(appState.isSyncing ? "同步中…" : "同步配置")
+                        Text(appState.isSyncing ? "同步中…" : "同步节点")
                     }
                 }
-                .help("从订阅源同步节点并热重载")
+                .help("从订阅源同步最新节点并生效")
                 .disabled(appState.isSyncing)
 
                 Button {
@@ -212,7 +215,6 @@ struct DashboardView: View {
             }
         }
         .background {
-            // Keyboard shortcuts ⌘1–⌘4 for instant tab switching.
             Group {
                 Button("") { selection = .audit }.keyboardShortcut("1", modifiers: .command)
                 Button("") { selection = .targets }.keyboardShortcut("2", modifiers: .command)
@@ -259,6 +261,23 @@ struct DashboardView: View {
             .padding(.vertical, 8)
             .background(Color.orange.opacity(0.14))
             Divider()
+        } else if let release = appState.availableUpdate {
+            HStack(spacing: 10) {
+                Image(systemName: "arrow.down.circle.fill")
+                    .foregroundStyle(Color.accentColor)
+                Text("发现新版本 \(release.tagName)")
+                    .font(.caption.weight(.medium))
+                Spacer()
+                Button("立即更新") {
+                    appState.showUpdateSheet = true
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.mini)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 7)
+            .background(Color.accentColor.opacity(0.10))
+            Divider()
         } else if let banner = appState.statusBannerMessage {
             HStack(spacing: 8) {
                 Image(systemName: "checkmark.circle.fill")
@@ -279,7 +298,6 @@ struct DashboardView: View {
 
     private var sidebar: some View {
         VStack(spacing: 0) {
-            // Unified compact master control card
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
                     Image(systemName: appState.menuBarSymbolName)
@@ -290,7 +308,7 @@ struct DashboardView: View {
                         Text("PinGate")
                             .font(.headline)
                         StatusDotLabel(
-                            text: appState.shortProtectionStateLabel,
+                            text: appState.overallHealthState.displayName,
                             color: appState.healthColor,
                             emphasized: appState.overallHealthState == .leaking
                         )
@@ -313,7 +331,7 @@ struct DashboardView: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     } else {
-                        Text("尚未配置出口")
+                        Text("未配置代理出口")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -324,17 +342,21 @@ struct DashboardView: View {
                         Button {
                             Task { await appState.probeExitIP() }
                         } label: {
-                            if appState.isProbingExitIP {
-                                ProgressView()
-                                    .controlSize(.mini)
-                            } else {
-                                Image(systemName: "globe")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                            Group {
+                                if appState.isProbingExitIP {
+                                    ProgressView()
+                                        .controlSize(.mini)
+                                } else {
+                                    Image(systemName: "globe")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
+                            .frame(width: 22, height: 22)
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .help("重新探测出口 IP")
+                        .help("重新检测出口 IP")
                         .disabled(appState.isProbingExitIP)
                     }
                 }
@@ -360,6 +382,53 @@ struct DashboardView: View {
                 }
             }
             .listStyle(.sidebar)
+
+            Divider()
+
+            // Minimal 1-line version & update check footer
+            HStack(spacing: 6) {
+                Text(appState.currentAppVersion.tagString)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if let release = appState.availableUpdate {
+                    Button {
+                        appState.showUpdateSheet = true
+                    } label: {
+                        HStack(spacing: 4) {
+                            Circle()
+                                .fill(Color.accentColor)
+                                .frame(width: 6, height: 6)
+                            Text("升级至 \(release.tagName)")
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(Color.accentColor)
+                        }
+                        .padding(.vertical, 2)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Button {
+                        Task { await appState.checkForUpdates(userInitiated: true) }
+                    } label: {
+                        HStack(spacing: 4) {
+                            if appState.isCheckingUpdate {
+                                ProgressView()
+                                    .controlSize(.mini)
+                            }
+                            Text(appState.isCheckingUpdate ? "检查中…" : "检查更新")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 2)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(appState.isCheckingUpdate)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
         }
         .navigationSplitViewColumnWidth(min: 205, ideal: 220, max: 250)
     }
@@ -407,6 +476,142 @@ struct DashboardView: View {
             case "audit": selection = .audit
             default: break
             }
+        }
+    }
+}
+
+// MARK: - Auto-Update Release Notes & Install Sheet
+
+private struct UpdateSheetView: View {
+    @Bindable var appState: AppState
+    @Environment(\.dismiss) private var dismiss
+    @State private var showRestartConfirm = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if let release = appState.availableUpdate {
+                HStack(spacing: 12) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Color.accentColor.opacity(0.14))
+                            .frame(width: 40, height: 40)
+                        Image(systemName: "arrow.down.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(Color.accentColor)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("发现新版本 \(release.tagName)")
+                            .font(.headline)
+                        Text("当前版本 \(appState.currentAppVersion.tagString) → \(release.tagName)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("更新说明")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    ScrollView {
+                        Text(release.releaseNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            ? "本次更新包含稳定性改进与问题修复。"
+                            : release.releaseNotes)
+                            .font(.callout)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                            .padding(10)
+                    }
+                    .frame(height: 170)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color(nsColor: .controlBackgroundColor))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                            .allowsHitTesting(false)
+                    )
+                }
+
+                if let progress = appState.updateProgress {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            if appState.isDownloadingUpdate {
+                                ProgressView()
+                                    .controlSize(.small)
+                            }
+                            Text(progress.displayName)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        if case .downloading(let fraction, _, _) = progress {
+                            ProgressView(value: fraction)
+                        }
+                    }
+                }
+
+                if let err = appState.updateErrorMessage {
+                    Text(err)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+
+                HStack {
+                    Button("在 GitHub 查看") {
+                        NSWorkspace.shared.open(release.htmlURL)
+                    }
+                    .buttonStyle(.link)
+                    .font(.caption)
+
+                    Spacer()
+
+                    Button("稍后") {
+                        dismiss()
+                    }
+                    .keyboardShortcut(.cancelAction)
+
+                    if appState.preparedUpdate != nil {
+                        Button("重启并更新") {
+                            showRestartConfirm = true
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .keyboardShortcut(.defaultAction)
+                    } else {
+                        Button(appState.isDownloadingUpdate ? "正在下载并校验更新…" : "下载并校验") {
+                            Task { await appState.downloadAndVerifyUpdate() }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(appState.isDownloadingUpdate)
+                        .keyboardShortcut(.defaultAction)
+                    }
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("已是最新版本")
+                        .font(.headline)
+                    Text("当前版本 \(appState.currentAppVersion.tagString) 已为最新。")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    HStack {
+                        Spacer()
+                        Button("关闭") { dismiss() }
+                            .keyboardShortcut(.cancelAction)
+                    }
+                }
+            }
+        }
+        .padding(20)
+        .frame(width: 480)
+        .alert("准备更新到 \(appState.availableUpdate?.tagName ?? "")", isPresented: $showRestartConfirm) {
+            Button("重启并更新") {
+                appState.applyPreparedUpdateAndRestart()
+            }
+            Button("稍后", role: .cancel) {}
+        } message: {
+            Text("更新完成后会自动重启 PinGate 并恢复代理，配置不会丢失。")
         }
     }
 }

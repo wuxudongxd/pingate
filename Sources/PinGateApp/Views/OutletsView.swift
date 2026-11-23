@@ -30,8 +30,8 @@ struct OutletsView: View {
 
     @State private var newFallbackNode: String = ""
     @State private var showAdvancedNetwork: Bool = false
-    @State private var showRestartConfirm: Bool = false
-    @State private var showDeleteConfirm: Bool = false
+    @State private var showRestartAlert: Bool = false
+    @State private var showDeleteAlert: Bool = false
 
     private var savedOutlet: OutletConfig? {
         guard let id = selectedOutletID else { return appState.config.primaryOutlet() }
@@ -58,9 +58,9 @@ struct OutletsView: View {
                     }
                 } else {
                     ContentUnavailableView(
-                        "尚未配置出口通道",
+                        "尚未配置代理出口",
                         systemImage: "network.slash",
-                        description: Text("添加一个出口通道，将目标应用固定到指定代理节点。")
+                        description: Text("添加一个代理出口，将指定应用固定到目标节点。")
                     )
                     .padding(.vertical, 40)
                 }
@@ -75,26 +75,18 @@ struct OutletsView: View {
                 loadInitialSelection()
             }
         }
-        .confirmationDialog(
-            "确定要重启固定出口通道吗？",
-            isPresented: $showRestartConfirm,
-            titleVisibility: .visible
-        ) {
-            Button("重启通道", role: .destructive) {
+        .alert("确定要重启代理出口吗？", isPresented: $showRestartAlert) {
+            Button("重启", role: .destructive) {
                 if let outlet = buildDraftWithSource() ?? savedOutlet {
                     Task { await appState.restartOutlet(outlet) }
                 }
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("重启过程会导致正在使用该出口的应用短暂重连（约 1–2 秒）。")
+            Text("重启过程中，正在使用该出口的应用会短暂重连（约 1–2 秒）。")
         }
-        .confirmationDialog(
-            "确定要删除此出口通道吗？",
-            isPresented: $showDeleteConfirm,
-            titleVisibility: .visible
-        ) {
-            Button("删除出口", role: .destructive) {
+        .alert("确定要删除此代理出口吗？", isPresented: $showDeleteAlert) {
+            Button("删除", role: .destructive) {
                 if let id = draftOutlet?.id {
                     deleteOutlet(id: id)
                 }
@@ -103,9 +95,9 @@ struct OutletsView: View {
         } message: {
             let boundCount = draftOutlet.map { appState.config.targets(for: $0.id).count } ?? 0
             if boundCount > 0 {
-                Text("当前仍有 \(String(boundCount)) 个纳管目标绑定到此出口，删除后需为其重新指定出口。")
+                Text("当前仍有 \(String(boundCount)) 个代理应用绑定到此出口，删除后需要重新指定。")
             } else {
-                Text("删除后该出口通道配置将被移除。")
+                Text("删除后此出口配置将被移除。")
             }
         }
     }
@@ -113,9 +105,9 @@ struct OutletsView: View {
     private var headerRow: some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("出口通道")
+                Text("代理出口")
                     .font(.title2.bold())
-                Text("管理固定代理出口、节点选择与订阅自动同步。")
+                Text("选择固定出口节点、测速并管理订阅来源。")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -123,7 +115,7 @@ struct OutletsView: View {
             Spacer()
 
             if appState.config.outlets.count > 1 {
-                Picker("出口通道", selection: Binding(
+                Picker("代理出口", selection: Binding(
                     get: { selectedOutletID ?? appState.config.outlets.first?.id ?? UUID() },
                     set: { id in
                         selectedOutletID = id
@@ -154,14 +146,13 @@ struct OutletsView: View {
 
     private func currentOutletAndNodeCard(outlet: OutletConfig) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            // Calm status strip (no conflicting start/stop/prominent-restart buttons!)
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
                         StatusDotLabel(
                             text: appState.outletRunning
                                 ? "运行中\(appState.mihomoVersion.map { " · mihomo \($0)" } ?? "")"
-                                : "已暂停（可在左上角总开关开启）",
+                                : "已关闭（点击左上角总开关即可开启）",
                             color: appState.outletRunning ? .green : .secondary
                         )
                         if let sync = appState.lastSyncResult {
@@ -193,10 +184,10 @@ struct OutletsView: View {
                         if appState.isProbingExitIP {
                             HStack(spacing: 4) {
                                 ProgressView().controlSize(.mini)
-                                Text("探测中…")
+                                Text("检测中…")
                             }
                         } else {
-                            Text("探测 IP")
+                            Text("测出口 IP")
                         }
                     }
                     .buttonStyle(.bordered)
@@ -227,23 +218,24 @@ struct OutletsView: View {
 
                         if appState.outletRunning {
                             Divider()
-                            Button("重启通道…") {
-                                showRestartConfirm = true
+                            Button("重启出口…") {
+                                showRestartAlert = true
                             }
                         }
                     } label: {
                         Image(systemName: "ellipsis.circle")
+                            .frame(width: 24, height: 24)
+                            .contentShape(Rectangle())
                     }
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
                     .fixedSize()
-                    .help("更多通道操作")
+                    .help("更多操作")
                 }
             }
 
             Divider()
 
-            // Primary Node Row
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 12) {
                 GridRow {
                     Text("主节点")
@@ -289,7 +281,6 @@ struct OutletsView: View {
                     }
                 }
 
-                // Fallback Nodes Row
                 GridRow(alignment: .top) {
                     Text("备用节点")
                         .font(.subheadline)
@@ -325,6 +316,8 @@ struct OutletsView: View {
                                             draftOutlet?.fallbackNodeNames.removeAll { $0 == node }
                                         } label: {
                                             Image(systemName: "minus.circle")
+                                                .frame(width: 22, height: 22)
+                                                .contentShape(Rectangle())
                                         }
                                         .buttonStyle(.borderless)
                                     }
@@ -377,6 +370,7 @@ struct OutletsView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                .allowsHitTesting(false)
         )
     }
 
@@ -399,7 +393,7 @@ struct OutletsView: View {
                             Text("同步中…")
                         }
                     } else {
-                        Label("立即同步", systemImage: "arrow.triangle.2.circlepath")
+                        Label("同步节点", systemImage: "arrow.triangle.2.circlepath")
                     }
                 }
                 .buttonStyle(.bordered)
@@ -466,7 +460,7 @@ struct OutletsView: View {
 
             case .manualYAML:
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("粘贴 Clash proxies YAML 片段（将自动安全存储）：")
+                    Text("粘贴 Clash 节点 YAML 片段：")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     TextEditor(text: $manualYAMLText)
@@ -475,6 +469,7 @@ struct OutletsView: View {
                         .overlay(
                             RoundedRectangle(cornerRadius: 6)
                                 .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+                                .allowsHitTesting(false)
                         )
                 }
 
@@ -526,13 +521,14 @@ struct OutletsView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                .allowsHitTesting(false)
         )
     }
 
-    // MARK: - Layer 2: Collapsible Advanced Network Settings
+    // MARK: - Layer 2: Full-Row Clickable Collapsible Advanced Network Settings
 
     private func advancedNetworkSection(outlet: OutletConfig) -> some View {
-        DisclosureGroup("高级网络设置", isExpanded: $showAdvancedNetwork) {
+        CollapsibleCard(title: "高级网络设置", isExpanded: $showAdvancedNetwork) {
             VStack(alignment: .leading, spacing: 12) {
                 Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
                     GridRow {
@@ -594,24 +590,13 @@ struct OutletsView: View {
                     HStack {
                         Spacer()
                         Button("删除此出口…", role: .destructive) {
-                            showDeleteConfirm = true
+                            showDeleteAlert = true
                         }
                         .controlSize(.small)
                     }
                 }
             }
-            .padding(.top, 10)
         }
-        .font(.subheadline.weight(.medium))
-        .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
-        )
     }
 
     // MARK: - Contextual Save Bar (Only Shown When Dirty)
@@ -641,6 +626,7 @@ struct OutletsView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(Color.orange.opacity(0.28), lineWidth: 1)
+                .allowsHitTesting(false)
         )
     }
 
@@ -733,7 +719,7 @@ struct OutletsView: View {
         let nextPort = (appState.config.outlets.map(\.listenPort).max() ?? 17898) + 1
         let nextCtrl = (appState.config.outlets.map(\.controllerPort).max() ?? 17889) + 1
         let newOutlet = OutletConfig(
-            name: "出口通道 \(appState.config.outlets.count + 1)",
+            name: "代理出口 \(appState.config.outlets.count + 1)",
             listenPort: nextPort,
             controllerPort: nextCtrl,
             source: .localClashProfile(path: appState.discoveredFlClashProfiles.first?.path ?? ""),

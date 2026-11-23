@@ -30,9 +30,9 @@ public enum AppLaunchError: Error, LocalizedError, Sendable {
     public var errorDescription: String? {
         switch self {
         case .unsupportedTargetKind(let name):
-            return "目标「\(name)」不是 GUI 应用类型。"
+            return "应用「\(name)」不是桌面应用。"
         case .missingAppPath(let name):
-            return "目标「\(name)」未配置应用路径（appPath）。"
+            return "应用「\(name)」未配置应用路径（appPath）。"
         case .appNotFound(let path):
             return "未在 \(path) 找到应用程序包。"
         case .failedToTerminateExisting(let pids):

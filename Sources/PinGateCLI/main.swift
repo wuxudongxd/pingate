@@ -114,6 +114,7 @@ func printUsage() {
       shim status  [target] [--dir <dir>]
       t3 sync [target]                      Sync T3 Code provider environment in settings.json (with .bak backup)
       t3 status [target]                    Check whether T3 Code provider environment is in sync
+      update [--check|--apply] [--force]    Check or apply PinGate updates from GitHub Releases (SHA-256 verified)
       help                                  Show this help message
     """)
 }
@@ -602,6 +603,243 @@ func runT3(store: ConfigStore, args: [String], jsonOutput: Bool) -> Int32 {
     }
 }
 
+struct UpdateCLIReport: Codable {
+    let currentVersion: String
+    let latestVersion: String?
+    let updateAvailable: Bool
+    let applied: Bool
+    let releaseTag: String?
+    let releaseURL: String?
+    let verifiedSHA256: String?
+    let message: String
+}
+
+func resolveInstalledAppVersion(targetAppURL: URL, overrideString: String?) throws -> SemanticVersion {
+    if let overrideString {
+        guard let parsed = SemanticVersion(string: overrideString) else {
+            throw AppUpdaterError.invalidVersion(overrideString)
+        }
+        return parsed
+    }
+    if FileManager.default.fileExists(atPath: targetAppURL.path),
+       let bundle = Bundle(url: targetAppURL) {
+        return AppUpdater.currentAppVersion(bundle: bundle)
+    }
+    return AppUpdater.currentAppVersion()
+}
+
+func runUpdate(store: ConfigStore, args: [String], jsonOutput: Bool) async -> Int32 {
+    var apply = false
+    var force = false
+    var relaunch = true
+    var targetAppURL = URL(fileURLWithPath: "/Applications/PinGate.app")
+    var overrideVersion: String? = nil
+
+    var i = 0
+    while i < args.count {
+        let arg = args[i]
+        switch arg {
+        case "--check":
+            apply = false
+            i += 1
+        case "--apply":
+            apply = true
+            i += 1
+        case "--force":
+            force = true
+            i += 1
+        case "--no-relaunch":
+            relaunch = false
+            i += 1
+        case "--target-app":
+            if i + 1 < args.count {
+                let expanded = NSString(string: args[i + 1]).expandingTildeInPath
+                targetAppURL = URL(fileURLWithPath: expanded)
+                i += 2
+            } else {
+                printError("Usage: pingate update [--check|--apply] [--force] [--target-app <path>] [--current-version <semver>]")
+                return 1
+            }
+        case "--current-version":
+            if i + 1 < args.count {
+                overrideVersion = args[i + 1]
+                i += 2
+            } else {
+                printError("Missing value for --current-version")
+                return 1
+            }
+        default:
+            printError("Unknown option '\(arg)' for update.")
+            return 1
+        }
+    }
+
+    do {
+        let currentVersion = try resolveInstalledAppVersion(
+            targetAppURL: targetAppURL,
+            overrideString: overrideVersion
+        )
+
+        // Use local active outlet proxy if available (AppUpdater automatically falls back to direct).
+        let proxyOutlet: OutletConfig?
+        if store.configExists(), let config = try? store.load(), let primary = config.primaryOutlet() {
+            let inspector = DarwinProcessInspector()
+            proxyOutlet = inspector.isLocalPortListening(
+                host: primary.listenHost,
+                port: primary.listenPort,
+                timeout: 0.4
+            ) ? primary : nil
+        } else {
+            proxyOutlet = nil
+        }
+
+        let updater = AppUpdater(configStore: store)
+        let checkResult = try await updater.checkForUpdates(
+            currentVersion: currentVersion,
+            proxyOutlet: proxyOutlet
+        )
+
+        if !apply {
+            switch checkResult {
+            case .upToDate(let current, let latest):
+                let msg = latest.map { "已是最新版本（当前 v\(current)，最新 \($0.tagName)）" }
+                    ?? "当前版本 v\(current)（尚无已发布的正式版本）"
+                if jsonOutput {
+                    try printJSON(UpdateCLIReport(
+                        currentVersion: current.description,
+                        latestVersion: latest?.version.description,
+                        updateAvailable: false,
+                        applied: false,
+                        releaseTag: latest?.tagName,
+                        releaseURL: latest?.htmlURL.absoluteString,
+                        verifiedSHA256: nil,
+                        message: msg
+                    ))
+                } else {
+                    print(msg)
+                    if let latest {
+                        print("  发布页面：\(latest.htmlURL.absoluteString)")
+                    }
+                }
+                return 0
+
+            case .updateAvailable(let current, let release):
+                let msg = "发现新版本 \(release.tagName)（当前 v\(current)）"
+                if jsonOutput {
+                    try printJSON(UpdateCLIReport(
+                        currentVersion: current.description,
+                        latestVersion: release.version.description,
+                        updateAvailable: true,
+                        applied: false,
+                        releaseTag: release.tagName,
+                        releaseURL: release.htmlURL.absoluteString,
+                        verifiedSHA256: nil,
+                        message: msg
+                    ))
+                } else {
+                    print(msg)
+                    print("  发布页面：\(release.htmlURL.absoluteString)")
+                    print("  安装包：  \(release.zipAssetName)")
+                    if !release.releaseNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        print("  更新日志：")
+                        for line in release.releaseNotes.split(whereSeparator: \.isNewline).prefix(10) {
+                            print("    \(line)")
+                        }
+                    }
+                    print("运行 `pingate update --apply` 即可自动下载校验并升级。")
+                }
+                return 0
+            }
+        }
+
+        // --apply mode
+        let targetRelease: ReleaseInfo
+        switch checkResult {
+        case .updateAvailable(_, let release):
+            targetRelease = release
+        case .upToDate(let current, let latest):
+            if force, let latest {
+                targetRelease = latest
+            } else {
+                let msg = "已是最新版本 v\(current)，无需更新。"
+                if jsonOutput {
+                    try printJSON(UpdateCLIReport(
+                        currentVersion: current.description,
+                        latestVersion: latest?.version.description,
+                        updateAvailable: false,
+                        applied: false,
+                        releaseTag: latest?.tagName,
+                        releaseURL: latest?.htmlURL.absoluteString,
+                        verifiedSHA256: nil,
+                        message: msg
+                    ))
+                } else {
+                    print(msg)
+                }
+                return 0
+            }
+        }
+
+        if !jsonOutput {
+            print("正在更新 PinGate：v\(currentVersion) -> \(targetRelease.tagName)…")
+        }
+
+        let quiet = jsonOutput
+        let prepared = try await updater.downloadAndVerify(
+            release: targetRelease,
+            proxyOutlet: proxyOutlet,
+            verifyCodeSign: true
+        ) { progress in
+            if !quiet {
+                FileHandle.standardError.write(Data("  \(progress.displayName)\n".utf8))
+            }
+        }
+
+        // Check if PinGateApp is currently running so the self-update helper waits for clean shutdown.
+        let inspector = DarwinProcessInspector()
+        let appPathPrefix = targetAppURL.path
+        let runningApps = inspector.inspectAllProcesses(
+            matching: { name, path in
+                name == "PinGateApp" && path.hasPrefix(appPathPrefix)
+            },
+            includeSockets: false,
+            includeEnvironment: false
+        )
+        let runningAppPID = runningApps.first?.pid
+
+        _ = try updater.scheduleSelfUpdate(
+            prepared: prepared,
+            targetAppURL: targetAppURL,
+            waitForPID: runningAppPID,
+            relaunchApp: relaunch
+        )
+
+        if let pid = runningAppPID {
+            _ = kill(pid, SIGTERM)
+        }
+
+        let msg = "已校验 SHA-256（\(prepared.verifiedSHA256.prefix(12))…）并启动原子替换安装程序，即将升级到 \(targetRelease.tagName)。"
+        if jsonOutput {
+            try printJSON(UpdateCLIReport(
+                currentVersion: currentVersion.description,
+                latestVersion: targetRelease.version.description,
+                updateAvailable: true,
+                applied: true,
+                releaseTag: targetRelease.tagName,
+                releaseURL: targetRelease.htmlURL.absoluteString,
+                verifiedSHA256: prepared.verifiedSHA256,
+                message: msg
+            ))
+        } else {
+            print(msg)
+        }
+        return 0
+    } catch {
+        printError(error.localizedDescription)
+        return 1
+    }
+}
+
 func healthBadge(_ state: HealthState) -> String {
     switch state {
     case .protected: return "[PROTECTED]"
@@ -630,6 +868,8 @@ case "shim":
     exitCode = runShim(store: store, args: parsed.args, jsonOutput: parsed.jsonOutput)
 case "t3":
     exitCode = runT3(store: store, args: parsed.args, jsonOutput: parsed.jsonOutput)
+case "update":
+    exitCode = await runUpdate(store: store, args: parsed.args, jsonOutput: parsed.jsonOutput)
 case "help", "--help", "-h":
     printUsage()
     exitCode = 0

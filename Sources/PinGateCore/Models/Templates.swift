@@ -37,7 +37,7 @@ public enum PinGateTemplates {
     public static let antigravitySuite = TargetTemplate(
         id: "antigravity-suite",
         name: "Antigravity + T3 Code + agy",
-        description: "将 Antigravity.app（含 language_server）、T3 Code 的 Antigravity 提供商与 agy CLI 固定到所选出口。",
+        description: "将 Antigravity、T3 Code 的 Antigravity 配置与 agy 命令行工具统一走所选代理出口。",
         iconSystemName: "sparkles"
     ) { outletID in
         [
@@ -78,7 +78,7 @@ public enum PinGateTemplates {
     public static let cursor = TargetTemplate(
         id: "cursor",
         name: "Cursor",
-        description: "将 Cursor.app 及其 Node/Electron 子进程固定到所选出口。",
+        description: "将 Cursor 及其后台子进程固定走所选代理出口。",
         iconSystemName: "cursorarrow.rays"
     ) { outletID in
         [
@@ -99,7 +99,7 @@ public enum PinGateTemplates {
     public static let claudeCode = TargetTemplate(
         id: "claude-code",
         name: "Claude Code",
-        description: "通过 ~/.local/bin/claude 封装脚本固定 claude CLI，并自动注入 NODE_USE_ENV_PROXY=1。",
+        description: "在 ~/.local/bin/claude 创建命令行代理，自动为 Claude Code 注入代理环境。",
         iconSystemName: "terminal"
     ) { outletID in
         [
@@ -118,8 +118,8 @@ public enum PinGateTemplates {
 
     public static let custom = TargetTemplate(
         id: "custom",
-        name: "自定义应用 / CLI",
-        description: "创建一个可自定义的桌面应用目标，指向任意 macOS 应用。",
+        name: "自定义应用",
+        description: "添加任意 macOS 桌面应用并固定其代理出口。",
         iconSystemName: "plus.app"
     ) { outletID in
         [

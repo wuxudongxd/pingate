@@ -9,13 +9,13 @@ public enum CLIShimError: Error, LocalizedError, Sendable, Equatable {
     public var errorDescription: String? {
         switch self {
         case .invalidCommandName(let name):
-            return "无效的 CLI Shim 命令名称：「\(name)」。"
+            return "无效的命令行工具名称：「\(name)」。"
         case .missingTargetBinaryPath(let name):
-            return "CLI 目标「\(name)」未配置目标二进制路径（cliTargetBinaryPath）。"
+            return "命令行工具「\(name)」未配置程序路径（cliTargetBinaryPath）。"
         case .existingUnmanagedFile(let path):
-            return "拒绝覆盖非 PinGate 托管的文件：\(path)。"
+            return "拒绝覆盖非 PinGate 管理的文件：\(path)。"
         case .unsupportedTargetKind(let name):
-            return "目标「\(name)」不是 CLI 工具类型。"
+            return "应用「\(name)」不是命令行工具。"
         }
     }
 }

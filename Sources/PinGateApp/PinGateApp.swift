@@ -2,8 +2,16 @@ import AppKit
 import PinGateCore
 import SwiftUI
 
+@MainActor
 final class PinGateAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleWindowWillClose(_:)),
+            name: NSWindow.willCloseNotification,
+            object: nil
+        )
+
         if CommandLine.arguments.contains("--open-dashboard")
             || CommandLine.arguments.contains("--snapshot")
             || CommandLine.arguments.contains("--snapshot-menubar")
@@ -12,11 +20,37 @@ final class PinGateAppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                 NSApp.activate(ignoringOtherApps: true)
             }
+        } else {
+            NSApp.setActivationPolicy(.accessory)
         }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+
+    @objc private func handleWindowWillClose(_ notification: Notification) {
+        let closingWindow = notification.object as? NSWindow
+        // Only react when a standard titled window (e.g. Dashboard) closes, not MenuBarExtra/NSPanel popovers.
+        if let closingWindow,
+           !(closingWindow.level == .normal && closingWindow.styleMask.contains(.titled) && !(closingWindow is NSPanel))
+        {
+            return
+        }
+
+        Task { @MainActor in
+            await Task.yield()
+            let hasOtherStandardWindow = NSApp.windows.contains { w in
+                w !== closingWindow
+                    && w.isVisible
+                    && w.level == .normal
+                    && w.styleMask.contains(.titled)
+                    && !(w is NSPanel)
+            }
+            if !hasOtherStandardWindow && NSApp.activationPolicy() != .accessory {
+                NSApp.setActivationPolicy(.accessory)
+            }
+        }
     }
 }
 
@@ -226,6 +260,10 @@ struct DashboardView: View {
             .accessibilityHidden(true)
         }
         .onAppear {
+            if NSApp.activationPolicy() != .regular {
+                NSApp.setActivationPolicy(.regular)
+            }
+            NSApp.activate(ignoringOtherApps: true)
             applyRequestedTabFromLaunchArgs()
             if let requested = appState.requestedDashboardSection {
                 selection = requested

@@ -59,10 +59,27 @@ public struct LaunchPlan: Sendable, Equatable {
 /// Launches managed GUI applications with full proxy environment injection, Chromium proxy flags,
 /// Fail-Closed port gating, and smart already-running detection via `DarwinProcessInspector`.
 public struct AppLauncher: Sendable {
+    /// Environment variables commonly inherited from Electron/Node host shells that can corrupt
+    /// GUI app launches (e.g., `ELECTRON_RUN_AS_NODE=1` forces Electron apps into Node CLI mode).
+    public static let contaminatedLaunchEnvironmentKeys: [String] = [
+        "ELECTRON_RUN_AS_NODE",
+        "ELECTRON_NO_ASAR",
+        "ELECTRON_NO_ATTACH_CONSOLE",
+        "NODE_OPTIONS"
+    ]
+
     public let inspector: any ProcessInspecting
 
     public init(inspector: any ProcessInspecting = DarwinProcessInspector()) {
         self.inspector = inspector
+    }
+
+    /// Removes Electron/Node contamination keys from the current process's `environ` so child
+    /// processes launched via `NSWorkspace.OpenConfiguration` or `Process` do not inherit them.
+    public static func sanitizeCurrentProcessEnvironment(preserving preservedKeys: Set<String> = []) {
+        for key in contaminatedLaunchEnvironmentKeys where !preservedKeys.contains(key) {
+            _ = unsetenv(key)
+        }
     }
 
     /// Builds the complete set of proxy environment variables (upper/lower case pairs + `NODE_USE_ENV_PROXY=1`).
@@ -259,18 +276,27 @@ public struct AppLauncher: Sendable {
 
     @MainActor
     private func openApplication(plan: LaunchPlan) async throws -> Int32? {
+        Self.sanitizeCurrentProcessEnvironment(preserving: Set(plan.environment.keys))
+
         let config = NSWorkspace.OpenConfiguration()
         config.activates = true
         config.createsNewApplicationInstance = false
         config.environment = plan.environment
         config.arguments = plan.arguments
 
+        let app: NSRunningApplication
         do {
-            let app = try await NSWorkspace.shared.openApplication(at: plan.appURL, configuration: config)
-            return app.processIdentifier > 0 ? app.processIdentifier : nil
+            app = try await NSWorkspace.shared.openApplication(at: plan.appURL, configuration: config)
         } catch {
             throw AppLaunchError.launchFailed(error.localizedDescription)
         }
+
+        try? await Task.sleep(for: .milliseconds(350))
+        if app.isTerminated {
+            throw AppLaunchError.launchFailed("应用启动后立即退出，请检查目标应用或启动参数")
+        }
+
+        return app.processIdentifier > 0 ? app.processIdentifier : nil
     }
 
     @MainActor

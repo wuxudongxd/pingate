@@ -5,6 +5,7 @@ import SwiftUI
 @MainActor
 final class PinGateAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        AppLauncher.sanitizeCurrentProcessEnvironment()
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleWindowWillClose(_:)),
@@ -60,6 +61,7 @@ struct PinGateApp: App {
     @State private var appState: AppState
 
     init() {
+        AppLauncher.sanitizeCurrentProcessEnvironment()
         let state = AppState()
         self._appState = State(initialValue: state)
         Task { @MainActor in

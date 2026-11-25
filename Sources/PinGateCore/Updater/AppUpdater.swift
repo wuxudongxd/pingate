@@ -606,7 +606,7 @@ public struct AppUpdater: Sendable {
 
         let relaunchBlock = relaunchApp
             ? """
-            /usr/bin/open "$TARGET_APP" >/dev/null 2>&1 || true
+            /usr/bin/env -u ELECTRON_RUN_AS_NODE -u ELECTRON_NO_ASAR -u ELECTRON_NO_ATTACH_CONSOLE -u NODE_OPTIONS /usr/bin/open -a "$TARGET_APP" >/dev/null 2>&1 || true
             """
             : "# Relaunch disabled"
 

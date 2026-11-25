@@ -796,7 +796,11 @@ final class CoreEngineTests: XCTestCase {
         XCTAssertTrue(script.contains("TRASH_DIR=\"$HOME/.Trash\""))
         XCTAssertTrue(script.contains("com.apple.quarantine"))
         XCTAssertTrue(script.contains("Contents/Resources/bin/pingate"))
-        XCTAssertTrue(script.contains("/usr/bin/open \"$TARGET_APP\""))
+        XCTAssertTrue(
+            script.contains(
+                "/usr/bin/env -u ELECTRON_RUN_AS_NODE -u ELECTRON_NO_ASAR -u ELECTRON_NO_ATTACH_CONSOLE -u NODE_OPTIONS /usr/bin/open -a \"$TARGET_APP\""
+            )
+        )
 
         // 5. Tampered checksum MUST fail with checksumMismatch
         servedChecksums = "\(String(repeating: "f", count: 64))  PinGate-v0.1.0-arm64.zip\n"
@@ -806,6 +810,33 @@ final class CoreEngineTests: XCTestCase {
         } catch AppUpdaterError.checksumMismatch {
             // Expected
         }
+    }
+
+    func testAppUpdaterRenderUpdateScriptSanitizesElectronEnvironment() {
+        let script = AppUpdater.renderUpdateScript(
+            stagedAppPath: "/var/empty/staged/PinGate.app",
+            targetAppPath: "/Applications/PinGate.app",
+            stagingDirectoryPath: "/var/empty/staged",
+            cliInstallPath: nil,
+            waitForPID: nil,
+            relaunchApp: true
+        )
+
+        XCTAssertTrue(script.contains("env -u ELECTRON_RUN_AS_NODE"))
+        XCTAssertTrue(script.contains("-u ELECTRON_NO_ASAR"))
+        XCTAssertTrue(script.contains("-u ELECTRON_NO_ATTACH_CONSOLE"))
+        XCTAssertTrue(script.contains("-u NODE_OPTIONS"))
+        XCTAssertTrue(script.contains("open -a \"$TARGET_APP\""))
+
+        let noRelaunchScript = AppUpdater.renderUpdateScript(
+            stagedAppPath: "/var/empty/staged/PinGate.app",
+            targetAppPath: "/Applications/PinGate.app",
+            stagingDirectoryPath: "/var/empty/staged",
+            cliInstallPath: nil,
+            waitForPID: nil,
+            relaunchApp: false
+        )
+        XCTAssertFalse(noRelaunchScript.contains("open -a \"$TARGET_APP\""))
     }
 }
 

@@ -851,6 +851,8 @@ func healthBadge(_ state: HealthState) -> String {
 
 // MARK: - Entry Point
 
+AppLauncher.sanitizeCurrentProcessEnvironment()
+
 let parsed = parseGlobalArguments(Array(CommandLine.arguments.dropFirst()))
 let store = makeConfigStore(configDir: parsed.configDir)
 

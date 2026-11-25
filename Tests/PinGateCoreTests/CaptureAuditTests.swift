@@ -437,6 +437,51 @@ struct CaptureAuditTests {
         #expect(runningOutcome == .runningWithoutProxy(pids: [9876], targetName: "ExampleApp", expectedPort: 17899))
     }
 
+    @Test("AppLauncher.sanitizeCurrentProcessEnvironment strips Electron/Node contamination and respects preserved keys")
+    func sanitizeLaunchEnvironment() {
+        let keys = AppLauncher.contaminatedLaunchEnvironmentKeys
+        #expect(keys == ["ELECTRON_RUN_AS_NODE", "ELECTRON_NO_ASAR", "ELECTRON_NO_ATTACH_CONSOLE", "NODE_OPTIONS"])
+
+        let sentinelKey = "PINGATE_TEST_UNRELATED_ENV_\(UUID().uuidString.prefix(8))"
+        var savedValues: [String: String?] = [:]
+        for key in keys {
+            savedValues[key] = getenv(key).map { String(cString: $0) }
+        }
+        defer {
+            _ = unsetenv(sentinelKey)
+            for (key, value) in savedValues {
+                if let value {
+                    _ = setenv(key, value, 1)
+                } else {
+                    _ = unsetenv(key)
+                }
+            }
+        }
+
+        // 1. Default sanitize removes all contaminated keys while preserving unrelated env vars.
+        _ = setenv("ELECTRON_RUN_AS_NODE", "1", 1)
+        _ = setenv("ELECTRON_NO_ASAR", "1", 1)
+        _ = setenv("ELECTRON_NO_ATTACH_CONSOLE", "1", 1)
+        _ = setenv("NODE_OPTIONS", "--max-old-space-size=4096", 1)
+        _ = setenv(sentinelKey, "keep", 1)
+
+        AppLauncher.sanitizeCurrentProcessEnvironment()
+
+        for key in keys {
+            #expect(getenv(key) == nil)
+        }
+        #expect(getenv(sentinelKey).map { String(cString: $0) } == "keep")
+
+        // 2. Preserving explicitly requested keys keeps them intact while stripping the rest.
+        _ = setenv("ELECTRON_RUN_AS_NODE", "1", 1)
+        _ = setenv("NODE_OPTIONS", "--max-old-space-size=2048", 1)
+
+        AppLauncher.sanitizeCurrentProcessEnvironment(preserving: ["NODE_OPTIONS"])
+
+        #expect(getenv("ELECTRON_RUN_AS_NODE") == nil)
+        #expect(getenv("NODE_OPTIONS").map { String(cString: $0) } == "--max-old-space-size=2048")
+    }
+
     // MARK: 7. CLIShimManager
 
     @Test("CLIShimManager idempotently installs, protects unmanaged files, reports status, and removes shims")

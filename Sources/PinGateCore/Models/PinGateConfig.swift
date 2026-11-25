@@ -224,11 +224,13 @@ public struct BypassRules: Codable, Sendable, Equatable, Hashable {
         self.blockTelemetry = try container.decodeIfPresent(Bool.self, forKey: .blockTelemetry) ?? true
     }
 
-    /// Generates a deduplicated comma-separated NO_PROXY value combining loopback, corporate domains, and private CIDRs.
+    /// Generates a deduplicated comma-separated NO_PROXY value combining loopback/local hosts and private CIDRs.
+    /// Bypass domains are intentionally omitted here so traffic routes through local Mihomo (`nameserver-policy: system` + `DIRECT`),
+    /// avoiding direct public-IP sockets that would trigger false-positive leak alerts.
     public func noProxyCSV() -> String {
         var result: [String] = []
         var seen = Set<String>()
-        for raw in extraNoProxyEntries + domains + cidrs {
+        for raw in extraNoProxyEntries + cidrs {
             let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty, !seen.contains(trimmed) else { continue }
             seen.insert(trimmed)
@@ -237,7 +239,8 @@ public struct BypassRules: Codable, Sendable, Equatable, Hashable {
         return result.joined(separator: ",")
     }
 
-    /// Generates a semicolon-separated Chromium `--proxy-bypass-list` value.
+    /// Generates a semicolon-separated Chromium `--proxy-bypass-list` value containing only local/loopback entries and private CIDRs.
+    /// Bypass domains are handled by local Mihomo (`nameserver-policy: system` + `DOMAIN-SUFFIX,...,DIRECT`).
     public func chromiumBypassList() -> String {
         var result: [String] = []
         var seen = Set<String>()
@@ -253,18 +256,6 @@ public struct BypassRules: Codable, Sendable, Equatable, Hashable {
             if trimmed == "::1" {
                 appendUnique("[::1]")
             } else {
-                appendUnique(trimmed)
-            }
-        }
-        for domain in domains {
-            let trimmed = domain.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { continue }
-            if trimmed.hasPrefix("*.") {
-                appendUnique(trimmed)
-            } else if trimmed.hasPrefix(".") {
-                appendUnique("*\(trimmed)")
-            } else {
-                appendUnique("*.\(trimmed)")
                 appendUnique(trimmed)
             }
         }

@@ -90,14 +90,23 @@ final class CoreEngineTests: XCTestCase {
 
         let noProxy = rules.noProxyCSV()
         XCTAssertTrue(noProxy.contains("localhost"))
-        XCTAssertTrue(noProxy.contains(".corp.example.com"))
+        XCTAssertTrue(noProxy.contains("127.0.0.1"))
+        XCTAssertTrue(noProxy.contains("::1"))
+        XCTAssertTrue(noProxy.contains("127.0.0.0/8"))
         XCTAssertTrue(noProxy.contains("10.0.0.0/8"))
+        // Bypass domains must NOT be placed into NO_PROXY (handled via Mihomo nameserver-policy + DIRECT)
+        XCTAssertFalse(noProxy.contains("corp.example.com"))
+        XCTAssertFalse(noProxy.contains("intranet.example.org"))
 
         let chromium = rules.chromiumBypassList()
+        XCTAssertTrue(chromium.contains("localhost"))
+        XCTAssertTrue(chromium.contains("127.0.0.1"))
         XCTAssertTrue(chromium.contains("[::1]"))
-        XCTAssertTrue(chromium.contains("*.corp.example.com"))
-        XCTAssertTrue(chromium.contains("*.intranet.example.org"))
+        XCTAssertTrue(chromium.contains("127.0.0.0/8"))
         XCTAssertTrue(chromium.contains("10.0.0.0/8"))
+        // Bypass domains must NOT be placed into Chromium --proxy-bypass-list
+        XCTAssertFalse(chromium.contains("corp.example.com"))
+        XCTAssertFalse(chromium.contains("intranet.example.org"))
 
         XCTAssertEqual(
             rules.mihomoDomainSuffixes(),
@@ -325,20 +334,26 @@ final class CoreEngineTests: XCTestCase {
         XCTAssertEqual(parsed["external-controller"] as? String, "127.0.0.1:19890")
         XCTAssertEqual(parsed["secret"] as? String, "test-secret-token")
 
-        // Verify DNS configuration: domestic default/proxy-server nameservers, remote DoH, NO dns.listen
+        // Verify DNS configuration: domestic default/proxy-server nameservers, remote DoH, use-system-hosts, nameserver-policy, NO dns.listen
         let dns = try XCTUnwrap(parsed["dns"] as? [String: Any])
+        XCTAssertEqual(dns["use-system-hosts"] as? Bool, true)
         XCTAssertEqual(dns["default-nameserver"] as? [String], ["223.5.5.5", "119.29.29.29"])
         XCTAssertEqual(dns["proxy-server-nameserver"] as? [String], ["223.5.5.5", "119.29.29.29"])
+        let nameserverPolicy = try XCTUnwrap(dns["nameserver-policy"] as? [String: [String]])
+        XCTAssertEqual(nameserverPolicy["+.internal.example.com"], ["system"])
+        XCTAssertEqual(nameserverPolicy["+.corp.example.net"], ["system"])
         let remoteDNS = try XCTUnwrap(dns["nameserver"] as? [String])
         XCTAssertTrue(remoteDNS.allSatisfy { $0.hasPrefix("https://") })
         XCTAssertNil(dns["listen"], "Rendered Mihomo config must not bind an unused dns.listen port")
 
-        // Verify rules order: private CIDRs + bypass domains BEFORE MATCH,OUTLET
+        // Verify rules order: private CIDRs + bypass domains BEFORE telemetry REJECT and MATCH,OUTLET
         let rules = try XCTUnwrap(parsed["rules"] as? [String])
         let matchIndex = try XCTUnwrap(rules.firstIndex(of: "MATCH,OUTLET"))
+        let firstRejectIndex = try XCTUnwrap(rules.firstIndex(where: { $0.hasSuffix(",REJECT") }))
         XCTAssertEqual(matchIndex, rules.count - 1)
+        XCTAssertLessThan(firstRejectIndex, matchIndex)
 
-        let requiredBeforeMatch = [
+        let requiredBeforeRejectAndMatch = [
             "IP-CIDR,127.0.0.0/8,DIRECT,no-resolve",
             "IP-CIDR,10.0.0.0/8,DIRECT,no-resolve",
             "IP-CIDR,172.16.0.0/12,DIRECT,no-resolve",
@@ -347,8 +362,9 @@ final class CoreEngineTests: XCTestCase {
             "DOMAIN-SUFFIX,internal.example.com,DIRECT",
             "DOMAIN-SUFFIX,corp.example.net,DIRECT"
         ]
-        for rule in requiredBeforeMatch {
+        for rule in requiredBeforeRejectAndMatch {
             let idx = try XCTUnwrap(rules.firstIndex(of: rule), "Missing rule: \(rule)")
+            XCTAssertLessThan(idx, firstRejectIndex, "Rule \(rule) must appear before REJECT rules")
             XCTAssertLessThan(idx, matchIndex, "Rule \(rule) must appear before MATCH,OUTLET")
         }
 

@@ -103,7 +103,8 @@ public struct MihomoConfigRenderer: Sendable {
         }
 
         // 2. Configured bypass domain suffixes BEFORE telemetry REJECT and MATCH,OUTLET
-        for suffix in bypassRules.mihomoDomainSuffixes() {
+        let domainSuffixes = bypassRules.mihomoDomainSuffixes()
+        for suffix in domainSuffixes {
             rules.append("DOMAIN-SUFFIX,\(suffix),DIRECT")
         }
 
@@ -115,14 +116,23 @@ public struct MihomoConfigRenderer: Sendable {
         // 4. Catch-all routed through the pinned OUTLET group
         rules.append("MATCH,\(Self.outletGroupName)")
 
-        let dnsConfig: [String: Any] = [
+        var dnsConfig: [String: Any] = [
             "enable": true,
             "ipv6": false,
             "enhanced-mode": "normal",
+            "use-system-hosts": true,
             "default-nameserver": domesticNameservers,
             "proxy-server-nameserver": domesticNameservers,
             "nameserver": remoteDoHNameservers
         ]
+        if !domainSuffixes.isEmpty {
+            var nameserverPolicy: [String: [String]] = [:]
+            nameserverPolicy.reserveCapacity(domainSuffixes.count)
+            for suffix in domainSuffixes {
+                nameserverPolicy["+.\(suffix)"] = ["system"]
+            }
+            dnsConfig["nameserver-policy"] = nameserverPolicy
+        }
 
         let root: [String: Any] = [
             "mixed-port": outlet.listenPort,

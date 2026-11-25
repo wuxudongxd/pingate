@@ -110,7 +110,7 @@ public struct AppLauncher: Sendable {
         return env
     }
 
-    /// Builds Chromium/Electron proxy flags synchronized with `BypassRules` and disabling QUIC.
+    /// Builds Chromium/Electron proxy flags with loopback/private CIDR bypass rules (bypass domains route via Mihomo DIRECT) and disabling QUIC.
     public static func buildChromiumArguments(
         outlet: OutletConfig,
         bypassRules: BypassRules

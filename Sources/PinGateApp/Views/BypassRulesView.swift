@@ -70,7 +70,7 @@ struct BypassRulesView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("规则与隐私")
                     .font(.title2.bold())
-                Text("以下域名、私网网段与本机地址会直接走系统网络或公司 VPN，不经过代理，也不会触发直连提醒。")
+                Text("直连域名由本地 mihomo 通过系统 DNS 直连（不走海外节点，避免防漏监控误报）；私网网段与本机地址会同时写入 NO_PROXY 与 Chromium 旁路列表。")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -152,6 +152,9 @@ struct BypassRulesView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("公司 / 内网直连域名")
                 .font(.headline)
+            Text("经由本地 mihomo 使用系统 DNS 直连，不写入 NO_PROXY。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
             HStack {
                 TextField("如 .corp.example.com", text: $newDomain)

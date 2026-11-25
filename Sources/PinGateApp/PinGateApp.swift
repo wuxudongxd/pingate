@@ -613,11 +613,12 @@ private struct UpdateSheetView: View {
                     }
                     .keyboardShortcut(.cancelAction)
 
-                    if appState.preparedUpdate != nil {
-                        Button("重启并更新") {
+                    if appState.preparedUpdate != nil || appState.isApplyingUpdate {
+                        Button(appState.isApplyingUpdate ? "正在重启并更新…" : "重启并更新") {
                             showRestartConfirm = true
                         }
                         .buttonStyle(.borderedProminent)
+                        .disabled(appState.isApplyingUpdate)
                         .keyboardShortcut(.defaultAction)
                     } else {
                         Button(appState.isDownloadingUpdate ? "正在下载并校验更新…" : "下载并校验") {
@@ -647,6 +648,7 @@ private struct UpdateSheetView: View {
         .frame(width: 480)
         .alert("准备更新到 \(appState.availableUpdate?.tagName ?? "")", isPresented: $showRestartConfirm) {
             Button("重启并更新") {
+                appState.showUpdateSheet = false
                 appState.applyPreparedUpdateAndRestart()
             }
             Button("稍后", role: .cancel) {}

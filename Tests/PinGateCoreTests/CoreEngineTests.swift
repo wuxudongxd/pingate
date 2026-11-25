@@ -809,6 +809,8 @@ final class CoreEngineTests: XCTestCase {
             relaunchApp: true
         )
         XCTAssertTrue(script.contains("WAIT_PID=12345"))
+        XCTAssertTrue(script.contains("kill -TERM \"$WAIT_PID\""))
+        XCTAssertTrue(script.contains("kill -KILL \"$WAIT_PID\""))
         XCTAssertTrue(script.contains("TRASH_DIR=\"$HOME/.Trash\""))
         XCTAssertTrue(script.contains("com.apple.quarantine"))
         XCTAssertTrue(script.contains("Contents/Resources/bin/pingate"))
@@ -817,6 +819,21 @@ final class CoreEngineTests: XCTestCase {
                 "/usr/bin/env -u ELECTRON_RUN_AS_NODE -u ELECTRON_NO_ASAR -u ELECTRON_NO_ATTACH_CONSOLE -u NODE_OPTIONS /usr/bin/open -a \"$TARGET_APP\""
             )
         )
+
+        // 4b. scheduleSelfUpdate fails fast when staged app directory is missing
+        let missingPrepared = PreparedUpdate(
+            release: release,
+            archiveURL: prepared.archiveURL,
+            stagingDirectory: tempDir.appendingPathComponent("nonexistent-stage", isDirectory: true),
+            stagedAppURL: tempDir.appendingPathComponent("nonexistent-stage/extracted/PinGate.app", isDirectory: true),
+            verifiedSHA256: validHash
+        )
+        XCTAssertThrowsError(try updater.scheduleSelfUpdate(prepared: missingPrepared, relaunchApp: false)) { error in
+            guard case AppUpdaterError.invalidAppBundle = error else {
+                XCTFail("Expected invalidAppBundle for missing staged app, got \(error)")
+                return
+            }
+        }
 
         // 5. Tampered checksum MUST fail with checksumMismatch
         servedChecksums = "\(String(repeating: "f", count: 64))  PinGate-v0.1.0-arm64.zip\n"

@@ -532,7 +532,13 @@ public struct AppUpdater: Sendable {
         waitForPID: Int32? = getpid(),
         relaunchApp: Bool = true
     ) throws -> URL {
+        guard FileManager.default.fileExists(atPath: prepared.stagedAppURL.path) else {
+            throw AppUpdaterError.invalidAppBundle("更新包临时目录已不存在，请重新下载更新。")
+        }
+
         _ = try backupConfigIfPresent()
+        try configStore.ensureDirectories()
+
         let scriptContent = Self.renderUpdateScript(
             stagedAppPath: prepared.stagedAppURL.path,
             targetAppPath: targetAppURL.path,
@@ -548,9 +554,13 @@ public struct AppUpdater: Sendable {
         }
         try ConfigStore.atomicWrite(data: scriptData, to: scriptURL, posixPermissions: 0o700)
 
+        let logURL = configStore.logsDirectory.appendingPathComponent("updater.log", isDirectory: false)
         let launcher = Process()
         launcher.executableURL = URL(fileURLWithPath: "/bin/bash")
-        launcher.arguments = ["-c", "nohup /bin/bash \(Self.shellQuote(scriptURL.path)) >/dev/null 2>&1 </dev/null &"]
+        launcher.arguments = [
+            "-c",
+            "nohup /bin/bash \(Self.shellQuote(scriptURL.path)) >>\(Self.shellQuote(logURL.path)) 2>&1 </dev/null &"
+        ]
         do {
             try launcher.run()
             launcher.waitUntilExit()
@@ -582,6 +592,26 @@ public struct AppUpdater: Sendable {
               fi
               sleep 0.25
             done
+            if kill -0 "$WAIT_PID" 2>/dev/null; then
+              echo "[PinGate Updater] PID $WAIT_PID still running after wait; sending SIGTERM"
+              kill -TERM "$WAIT_PID" 2>/dev/null || true
+              for _ in $(seq 1 20); do
+                if ! kill -0 "$WAIT_PID" 2>/dev/null; then
+                  break
+                fi
+                sleep 0.25
+              done
+            fi
+            if kill -0 "$WAIT_PID" 2>/dev/null; then
+              echo "[PinGate Updater] PID $WAIT_PID still running after SIGTERM; sending SIGKILL"
+              kill -KILL "$WAIT_PID" 2>/dev/null || true
+              for _ in $(seq 1 8); do
+                if ! kill -0 "$WAIT_PID" 2>/dev/null; then
+                  break
+                fi
+                sleep 0.25
+              done
+            fi
             """
         } else {
             waitBlock = "# No PID wait requested"

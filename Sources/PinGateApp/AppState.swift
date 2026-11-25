@@ -53,6 +53,7 @@ final class AppState {
     var availableUpdate: ReleaseInfo?
     var isCheckingUpdate: Bool = false
     var isDownloadingUpdate: Bool = false
+    var isApplyingUpdate: Bool = false
     var updateProgress: UpdateProgress?
     var preparedUpdate: PreparedUpdate?
     var updateErrorMessage: String?
@@ -376,7 +377,8 @@ final class AppState {
     }
 
     func applyPreparedUpdateAndRestart() {
-        guard let prepared = preparedUpdate else { return }
+        guard let prepared = preparedUpdate, !isApplyingUpdate else { return }
+        isApplyingUpdate = true
         updateErrorMessage = nil
         do {
             let currentPID = Int32(ProcessInfo.processInfo.processIdentifier)
@@ -385,8 +387,11 @@ final class AppState {
                 waitForPID: currentPID,
                 relaunchApp: true
             )
-            quitApp()
+            preparedUpdate = nil
+            showUpdateSheet = false
+            quitApp(forceExitAfterCleanup: true)
         } catch {
+            isApplyingUpdate = false
             updateErrorMessage = error.localizedDescription
         }
     }
@@ -895,7 +900,9 @@ final class AppState {
 
     private func requestNotificationPermissionIfBundled() {
         guard isBundledApp else { return }
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        Task {
+            _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
+        }
     }
 
     private func sendLeakNotification(summary: String) {
@@ -914,7 +921,7 @@ final class AppState {
 
     // MARK: - Shutdown
 
-    func quitApp() {
+    func quitApp(forceExitAfterCleanup: Bool = false) {
         pollTask?.cancel()
         pollTask = nil
         updateCheckTask?.cancel()
@@ -925,9 +932,19 @@ final class AppState {
             watcher.stop()
         }
         profileWatchers.removeAll()
+        showUpdateSheet = false
+        for window in NSApp.windows {
+            for sheet in window.sheets {
+                window.endSheet(sheet)
+            }
+        }
         Task {
             await mihomoManager.stopAll()
             NSApp.terminate(nil)
+            if forceExitAfterCleanup {
+                try? await Task.sleep(for: .milliseconds(250))
+                exit(0)
+            }
         }
     }
 }
